@@ -12,7 +12,6 @@ import {
   Plus,
   Clock,
   TrendingUp,
-  Layers,
   X,
   Copy,
   Check,
@@ -25,6 +24,7 @@ import {
   DollarSign,
   PieChart,
   Sparkles,
+  Upload,
 } from 'lucide-react';
 
 export default function App() {
@@ -38,6 +38,16 @@ export default function App() {
   const [clientes, setClientes] = useState([]);
   const [pagos, setPagos] = useState([]);
   const [cargando, setCargando] = useState(true);
+
+  // --- NOTIFICACIONES FLOTANTES ---
+  const [notificacion, setNotificacion] = useState({ visible: false, mensaje: '', tipo: 'success' });
+
+  function mostrarNotificacion(mensaje, tipo = 'success') {
+    setNotificacion({ visible: true, mensaje, tipo });
+    setTimeout(() => {
+      setNotificacion({ visible: false, mensaje: '', tipo: 'success' });
+    }, 3000);
+  }
 
   const [tc, setTc] = useState(() => {
     return localStorage.getItem('tc_aluria') || '3.42';
@@ -80,7 +90,7 @@ export default function App() {
   async function cargarDatos() {
     try {
       setCargando(true);
-      const { data: inv } = await supabase.from('inventario').select('*');
+      const { data: inv } = await supabase.from('inventario').select('*').order('id', { ascending: true });
       const { data: cli } = await supabase.from('clientes').select('*');
       const { data: pag } = await supabase.from('pagos').select('*');
       if (inv) setInventario(inv);
@@ -103,7 +113,7 @@ export default function App() {
       });
       if (error) throw error;
     } catch (error) {
-      alert('Error de autenticación: ' + error.message);
+      mostrarNotificacion('Error de autenticación: ' + error.message, 'error');
     } finally {
       setAuthLoading(false);
     }
@@ -114,7 +124,7 @@ export default function App() {
   }
 
   function exportarACSV(data, filename) {
-    if (!data || data.length === 0) return alert('No hay datos para exportar.');
+    if (!data || data.length === 0) return mostrarNotificacion('No hay datos para exportar', 'error');
     const keys = Object.keys(data[0]);
     const csvContent = [
       keys.join(','),
@@ -159,6 +169,59 @@ export default function App() {
 
   const [copiadoIdx, setCopiadoIdx] = useState(null);
 
+  // --- LIMPIEZA DE DUPLICADOS ---
+  async function limpiarDuplicados() {
+    if (!confirm('¿Estás seguro de limpiar los correos duplicados? El sistema conservará uno de cada correo y borrará los repetidos.')) return;
+    
+    setCargando(true);
+    try {
+      const { data, error } = await supabase.from('inventario').select('*');
+      if (error) throw error;
+
+      const correosMap = {};
+      const idsAEliminar = [];
+
+      data.forEach(item => {
+        const correoLimpio = (item.correo || '').toLowerCase().trim();
+        if (!correosMap[correoLimpio]) {
+          correosMap[correoLimpio] = [];
+        }
+        correosMap[correoLimpio].push(item);
+      });
+
+      Object.values(correosMap).forEach(grupo => {
+        if (grupo.length > 1) {
+          grupo.sort((a, b) => a.estado === 'Asignada' ? -1 : 1);
+          const aBorrar = grupo.slice(1);
+          aBorrar.forEach(item => idsAEliminar.push(item.id));
+        }
+      });
+
+      if (idsAEliminar.length === 0) {
+        mostrarNotificacion('No se encontraron correos duplicados', 'success');
+        setCargando(false);
+        return;
+      }
+
+      for (let i = 0; i < idsAEliminar.length; i += 100) {
+        const batch = idsAEliminar.slice(i, i + 100);
+        const { error: deleteError } = await supabase
+          .from('inventario')
+          .delete()
+          .in('id', batch);
+        if (deleteError) throw deleteError;
+      }
+
+      mostrarNotificacion(`Limpieza exitosa: ${idsAEliminar.length} eliminados.`, 'success');
+      cargarDatos();
+    } catch (err) {
+      mostrarNotificacion('Error al limpiar duplicados: ' + err.message, 'error');
+      console.error(err);
+    } finally {
+      setCargando(false);
+    }
+  }
+
   async function renovarCobranza(cliente) {
     try {
       const arr = cliente.fin ? cliente.fin.split('-') : [];
@@ -172,87 +235,94 @@ export default function App() {
         .update({ fin: nuevaFecha, pago: 'Pagado' })
         .eq('id', cliente.id);
       if (error) throw error;
-      alert(
-        `¡Cuenta de ${cliente.nombre} renovada exitosamente por 30 días más!`
-      );
+      mostrarNotificacion(`Cuenta de ${cliente.nombre} renovada`, 'success');
       cargarDatos();
     } catch (error) {
-      alert('Error al renovar: ' + error.message);
-    }
-  }
-
-  async function marcarPagadoProveedor(id) {
-    try {
-      const { error } = await supabase
-        .from('inventario')
-        .update({ proveedor_pagado: true })
-        .eq('id', id);
-      if (error) throw error;
-      cargarDatos();
-    } catch (error) {
-      alert('Error al actualizar pago a proveedor: ' + error.message);
+      mostrarNotificacion('Error al renovar: ' + error.message, 'error');
     }
   }
 
   async function sacarDelStock(id, correo) {
-    if (
-      !confirm(
-        `¿Estás seguro de dar de baja la cuenta ${correo}? Saldrá del stock permanentemente.`
-      )
-    )
-      return;
+    if (!confirm(`¿Dar de baja la cuenta ${correo}? Saldrá del stock permanentemente.`)) return;
     try {
       const { error } = await supabase.from('inventario').delete().eq('id', id);
       if (error) throw error;
+      mostrarNotificacion('Cuenta eliminada', 'success');
       cargarDatos();
     } catch (error) {
-      alert('Error al eliminar cuenta: ' + error.message);
+      mostrarNotificacion('Error al eliminar cuenta: ' + error.message, 'error');
     }
+  }
+
+  function manejarSubidaArchivoTxt(e) {
+    const archivo = e.target.files[0];
+    if (!archivo) return;
+    const lector = new FileReader();
+    lector.onload = (evento) => {
+      const contenido = evento.target.result;
+      setLoteCorreos((prev) => (prev ? prev + '\n' + contenido : contenido));
+    };
+    lector.readAsText(archivo);
   }
 
   async function procesarPegaInventario(e) {
     e.preventDefault();
-    const lineas = loteCorreos
-      .split('\n')
-      .map((l) => l.trim())
-      .filter((l) => l.length > 0);
-    if (lineas.length === 0) return alert('Sin correos válidos.');
+    try {
+      const regexCorreos = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
+      const correosEncontrados = loteCorreos.match(regexCorreos) || [];
 
-    const setExistentes = new Set(
-      inventario.map((i) => i.correo.toLowerCase())
-    );
-    let nuevas = [];
-    let dup = 0;
-
-    for (let i = 0; i < lineas.length; i++) {
-      const correoLimpio = lineas[i].toLowerCase();
-      if (!setExistentes.has(correoLimpio)) {
-        nuevas.push({
-          correo: lineas[i],
-          proveedor: loteProv,
-          costo: parseFloat(loteCosto) || 0,
-          precio: parseFloat(lotePrecio) || 0,
-          estado: 'Disponible',
-          cliente: '',
-          proveedor_pagado: false,
-        });
-        setExistentes.add(correoLimpio);
-      } else {
-        dup++;
+      if (correosEncontrados.length === 0) {
+        return mostrarNotificacion('No se encontraron correos válidos', 'error');
       }
-    }
 
-    if (nuevas.length > 0) {
-      const { error } = await supabase.from('inventario').insert(nuevas);
-      if (error) throw error;
-    }
+      const correosUnicos = [...new Set(correosEncontrados.map(c => c.toLowerCase().trim()))];
 
-    alert(`✅ Importadas: ${nuevas.length} | ❌ Duplicadas ignoradas: ${dup}`);
-    setLoteProv('');
-    setLoteCosto('');
-    setLotePrecio('');
-    setLoteCorreos('');
-    setModalInv(false);
+      const { data: correosBD, error: errConsulta } = await supabase
+        .from('inventario')
+        .select('correo');
+        
+      if (errConsulta) throw errConsulta;
+
+      const setExistentes = new Set(
+        (correosBD || []).map((i) => (i.correo || '').toLowerCase().trim())
+      );
+      
+      let nuevas = [];
+      let dup = 0;
+
+      for (let i = 0; i < correosUnicos.length; i++) {
+        const correo = correosUnicos[i];
+        if (!setExistentes.has(correo)) {
+          nuevas.push({
+            correo: correo,
+            proveedor: loteProv,
+            costo: parseFloat(loteCosto) || 0,
+            precio_venta: parseFloat(lotePrecio) || 0, 
+            estado: 'Disponible',
+            cliente_asignado: null
+          });
+          setExistentes.add(correo); 
+        } else {
+          dup++;
+        }
+      }
+
+      if (nuevas.length > 0) {
+        const { error } = await supabase.from('inventario').insert(nuevas);
+        if (error) throw error;
+      }
+
+      mostrarNotificacion(`Importados: ${nuevas.length} | Duplicados ignorados: ${dup}`, 'success');
+      setLoteProv('');
+      setLoteCosto('');
+      setLotePrecio('');
+      setLoteCorreos('');
+      setModalInv(false);
+      cargarDatos();
+    } catch (error) {
+      mostrarNotificacion('Error al guardar el lote: ' + error.message, 'error');
+      console.error(error);
+    }
   }
 
   async function guardarClienteNuevo(e) {
@@ -262,14 +332,14 @@ export default function App() {
     );
 
     if (!itemLibre) {
-      alert('❌ ERROR: La cuenta ya fue asignada o no existe en stock.');
+      mostrarNotificacion('La cuenta ya fue asignada o no existe', 'error');
       return;
     }
 
     try {
       await supabase
         .from('inventario')
-        .update({ estado: 'Asignada', cliente: cliNom })
+        .update({ estado: 'Asignada', cliente_asignado: cliNom }) 
         .eq('id', itemLibre.id);
 
       const nuevoCliente = {
@@ -286,9 +356,14 @@ export default function App() {
       if (error) throw error;
 
       setModalCli(false);
-      alert('¡Asignado con éxito!');
+      mostrarNotificacion('¡Cuenta asignada con éxito!', 'success');
+      cargarDatos();
+      
+      setCliNom('');
+      setCliNum('');
+      setCliCuentaAsignada('');
     } catch (error) {
-      alert('Error al guardar cliente: ' + error.message);
+      mostrarNotificacion('Error al guardar cliente: ' + error.message, 'error');
     }
   }
 
@@ -308,33 +383,57 @@ export default function App() {
       setGastoConcepto('');
       setGastoMonto('');
       setModalCaja(false);
+      mostrarNotificacion('Transacción registrada', 'success');
+      cargarDatos();
     } catch (error) {
-      alert('Error en control de gastos: ' + error.message);
+      mostrarNotificacion('Error en control de gastos: ' + error.message, 'error');
     }
   }
 
   async function eliminarCuentaInv(id, correo) {
     if (!confirm(`¿Eliminar cuenta ${correo}?`)) return;
-    await supabase.from('inventario').delete().eq('id', id);
+    try {
+      const { error } = await supabase.from('inventario').delete().eq('id', id);
+      if (error) throw error;
+      mostrarNotificacion('Cuenta eliminada', 'success');
+      cargarDatos();
+    } catch (error) {
+      mostrarNotificacion('Error al eliminar: ' + error.message, 'error');
+    }
   }
 
   async function eliminarClienteYLiberar(id, cuentaAsignada) {
     if (!confirm('¿Eliminar cliente y liberar cuenta al stock?')) return;
-    await supabase.from('clientes').delete().eq('id', id);
+    try {
+      await supabase.from('clientes').delete().eq('id', id);
 
-    const correoLimpio = cuentaAsignada.split(' (')[0].trim();
-    const invMatch = inventario.find((i) => i.correo.trim() === correoLimpio);
-    if (invMatch) {
-      await supabase
-        .from('inventario')
-        .update({ estado: 'Disponible', cliente: '' })
-        .eq('id', invMatch.id);
+      const correoLimpio = cuentaAsignada.split(' (')[0].trim();
+      const invMatch = inventario.find((i) => i.correo.trim() === correoLimpio);
+      if (invMatch) {
+        await supabase
+          .from('inventario')
+          .update({ estado: 'Disponible', cliente_asignado: null }) 
+          .eq('id', invMatch.id);
+      }
+      mostrarNotificacion('Cliente eliminado y cuenta liberada', 'success');
+      cargarDatos();
+    } catch (error) {
+      mostrarNotificacion('Error al eliminar: ' + error.message, 'error');
     }
   }
 
   if (!session) {
     return (
       <div className="flex h-screen items-center justify-center bg-[#050505] text-white">
+        {notificacion.visible && (
+          <div className={`fixed top-8 right-8 z-50 px-5 py-3.5 rounded-2xl shadow-2xl flex items-center gap-3 animate-fade-in ${
+            notificacion.tipo === 'success' ? 'bg-green-950/90 border border-green-900 text-green-400' : 'bg-red-950/90 border border-red-900 text-red-400'
+          }`}>
+            {notificacion.tipo === 'success' ? <Check className="w-5 h-5" /> : <AlertCircle className="w-5 h-5" />}
+            <span className="font-bold text-sm tracking-wide">{notificacion.mensaje}</span>
+          </div>
+        )}
+
         <div className="p-10 rounded-3xl border border-[#3b0909] bg-[#0d0d0d] w-full max-w-md shadow-2xl shadow-red-950/40 space-y-8 relative overflow-hidden">
           <div className="absolute top-0 right-0 w-32 h-32 bg-red-600/10 rounded-full blur-3xl pointer-events-none"></div>
           <div className="text-center space-y-3 relative z-10">
@@ -350,42 +449,20 @@ export default function App() {
           </div>
           <form onSubmit={handleLogin} className="space-y-5 relative z-10">
             <div>
-              <label className="text-xs text-neutral-300 block mb-2 font-bold uppercase tracking-wider">
-                Correo Electrónico
-              </label>
+              <label className="text-xs text-neutral-300 block mb-2 font-bold uppercase tracking-wider">Correo Electrónico</label>
               <div className="relative">
                 <Mail className="absolute left-3.5 top-3.5 w-4 h-4 text-red-500" />
-                <input
-                  type="email"
-                  required
-                  value={emailLogin}
-                  onChange={(e) => setEmailLogin(e.target.value)}
-                  className="w-full pl-11 pr-4 py-3 bg-[#141414] border border-neutral-800 rounded-xl text-sm text-white outline-none focus:ring-2 focus:ring-red-600 focus:border-transparent transition shadow-inner"
-                  placeholder="tucorreo@dominio.com"
-                />
+                <input type="email" required value={emailLogin} onChange={(e) => setEmailLogin(e.target.value)} className="w-full pl-11 pr-4 py-3 bg-[#141414] border border-neutral-800 rounded-xl text-sm text-white outline-none focus:ring-2 focus:ring-red-600 focus:border-transparent transition shadow-inner" placeholder="tucorreo@dominio.com" />
               </div>
             </div>
             <div>
-              <label className="text-xs text-neutral-300 block mb-2 font-bold uppercase tracking-wider">
-                Contraseña
-              </label>
+              <label className="text-xs text-neutral-300 block mb-2 font-bold uppercase tracking-wider">Contraseña</label>
               <div className="relative">
                 <Lock className="absolute left-3.5 top-3.5 w-4 h-4 text-red-500" />
-                <input
-                  type="password"
-                  required
-                  value={passLogin}
-                  onChange={(e) => setPassLogin(e.target.value)}
-                  className="w-full pl-11 pr-4 py-3 bg-[#141414] border border-neutral-800 rounded-xl text-sm text-white outline-none focus:ring-2 focus:ring-red-600 focus:border-transparent transition shadow-inner"
-                  placeholder="••••••••"
-                />
+                <input type="password" required value={passLogin} onChange={(e) => setPassLogin(e.target.value)} className="w-full pl-11 pr-4 py-3 bg-[#141414] border border-neutral-800 rounded-xl text-sm text-white outline-none focus:ring-2 focus:ring-red-600 focus:border-transparent transition shadow-inner" placeholder="••••••••" />
               </div>
             </div>
-            <button
-              type="submit"
-              disabled={authLoading}
-              className="w-full py-3.5 bg-gradient-to-r from-[#800f11] to-red-600 hover:from-red-700 hover:to-red-500 text-white rounded-xl font-bold transition duration-200 shadow-xl shadow-red-950 flex justify-center items-center gap-2 tracking-wide"
-            >
+            <button type="submit" disabled={authLoading} className="w-full py-3.5 bg-gradient-to-r from-[#800f11] to-red-600 hover:from-red-700 hover:to-red-500 text-white rounded-xl font-bold transition duration-200 shadow-xl shadow-red-950 flex justify-center items-center gap-2 tracking-wide">
               {authLoading ? 'Verificando...' : 'Iniciar Sesión'}
             </button>
           </form>
@@ -402,7 +479,7 @@ export default function App() {
   inventario.forEach((item) => {
     egresosUsdt += parseFloat(item.costo) || 0;
     if (item.estado === 'Asignada')
-      ingresosSoles += parseFloat(item.precio) || 0;
+      ingresosSoles += parseFloat(item.precio_venta) || 0; 
   });
 
   let cajaIngresos = 0;
@@ -457,7 +534,16 @@ export default function App() {
   return (
     <div className="flex h-screen overflow-hidden bg-[#050505] text-neutral-100 font-sans relative w-full">
       
-      {/* 💻 MENÚ LATERAL (Oculto en celulares, visible solo en computadoras: hidden md:flex) */}
+      {notificacion.visible && (
+        <div className={`fixed top-8 right-8 z-50 px-6 py-4 rounded-2xl shadow-2xl flex items-center gap-3 animate-fade-in transition-all ${
+          notificacion.tipo === 'success' ? 'bg-green-950/95 border border-green-800 text-green-400' : 'bg-red-950/95 border border-red-800 text-red-400'
+        }`}>
+          {notificacion.tipo === 'success' ? <Check className="w-5 h-5" /> : <AlertCircle className="w-5 h-5" />}
+          <span className="font-bold text-sm tracking-wide">{notificacion.mensaje}</span>
+        </div>
+      )}
+
+      {/* 💻 MENÚ LATERAL */}
       <aside className="hidden md:flex w-72 border-r border-[#260505] bg-[#0a0a0a] flex-col justify-between shadow-2xl z-20 shrink-0">
         <div>
           <div className="p-6 border-b border-[#260505] flex items-center gap-3 bg-gradient-to-r from-[#140202] to-transparent">
@@ -474,61 +560,22 @@ export default function App() {
             </div>
           </div>
           <nav className="px-4 py-6 space-y-2">
-            <BotonesMenu
-              icono={<LayoutDashboard />}
-              texto="Dashboard"
-              vista="dashboard"
-              vistaActual={vista}
-              setVista={setVista}
-            />
-            <BotonesMenu
-              icono={<Zap className="text-red-500" />}
-              texto="Ventas Rápidas"
-              vista="ventas"
-              vistaActual={vista}
-              setVista={setVista}
-            />
-            <BotonesMenu
-              icono={<Package />}
-              texto="Inventario"
-              vista="inventario"
-              vistaActual={vista}
-              setVista={setVista}
-            />
-            <BotonesMenu
-              icono={<Users />}
-              texto="Clientes"
-              vista="clientes"
-              vistaActual={vista}
-              setVista={setVista}
-            />
-            <BotonesMenu
-              icono={<DollarSign className="text-red-400" />}
-              texto="Gestión de Cuentas"
-              vista="gestion"
-              vistaActual={vista}
-              setVista={setVista}
-            />
-            <BotonesMenu
-              icono={<PieChart className="text-amber-500" />}
-              texto="Control de Gastos"
-              vista="gastos"
-              vistaActual={vista}
-              setVista={setVista}
-            />
+            <BotonesMenu icono={<LayoutDashboard />} texto="Dashboard" vista="dashboard" vistaActual={vista} setVista={setVista} />
+            <BotonesMenu icono={<Zap className="text-red-500" />} texto="Ventas Rápidas" vista="ventas" vistaActual={vista} setVista={setVista} />
+            <BotonesMenu icono={<Package />} texto="Inventario" vista="inventario" vistaActual={vista} setVista={setVista} />
+            <BotonesMenu icono={<Users />} texto="Clientes" vista="clientes" vistaActual={vista} setVista={setVista} />
+            <BotonesMenu icono={<DollarSign className="text-red-400" />} texto="Gestión de Cuentas" vista="gestion" vistaActual={vista} setVista={setVista} />
+            <BotonesMenu icono={<PieChart className="text-amber-500" />} texto="Control de Gastos" vista="gastos" vistaActual={vista} setVista={setVista} />
           </nav>
         </div>
         <div className="p-4 border-t border-[#260505] bg-[#050505]">
-          <button
-            onClick={handleLogout}
-            className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-red-400 hover:bg-red-950/30 transition border border-red-900/30 text-sm font-semibold tracking-wide shadow-sm"
-          >
+          <button onClick={handleLogout} className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-red-400 hover:bg-red-950/30 transition border border-red-900/30 text-sm font-semibold tracking-wide shadow-sm">
             <LogOut className="w-4 h-4" /> Cerrar Sesión
           </button>
         </div>
       </aside>
 
-      {/* 📱 BARRA INFERIOR MÓVIL (Solo visible en celulares: md:hidden) */}
+      {/* 📱 BARRA INFERIOR MÓVIL */}
       <nav className="md:hidden fixed bottom-0 inset-x-0 bg-[#0a0a0a] border-t border-[#260505] flex justify-around items-center py-2 px-1 z-40 shadow-2xl">
         <BotonMobile icono={<LayoutDashboard className="w-5 h-5" />} texto="Dash" vista="dashboard" vistaActual={vista} setVista={setVista} />
         <BotonMobile icono={<Zap className="w-5 h-5 text-red-500" />} texto="Ventas" vista="ventas" vistaActual={vista} setVista={setVista} />
@@ -542,36 +589,18 @@ export default function App() {
       <main className="flex-1 flex flex-col h-screen overflow-y-auto bg-transparent relative pb-20 md:pb-0 w-full">
         <header className="sticky top-0 z-10 px-6 py-4 flex justify-between items-center border-b border-[#260505] bg-[#0a0a0a]/90 backdrop-blur-2xl shadow-sm">
           <div className="flex items-center gap-3">
-            <button 
-              onClick={handleLogout}
-              className="md:hidden p-2 rounded-xl bg-red-950/50 text-red-400 border border-red-900/40"
-              title="Cerrar Sesión"
-            >
+            <button onClick={handleLogout} className="md:hidden p-2 rounded-xl bg-red-950/50 text-red-400 border border-red-900/40" title="Cerrar Sesión">
               <LogOut className="w-4 h-4" />
             </button>
             <h1 className="text-lg md:text-xl font-bold tracking-tight text-white capitalize flex items-center gap-2">
               <span className="w-2 h-2 rounded-full bg-red-600"></span>
-              {vista === 'clientes'
-                ? 'Clientes'
-                : vista === 'ventas'
-                ? 'Ventas Rápidas'
-                : vista === 'inventario'
-                ? 'Inventario'
-                : vista === 'gestion'
-                ? 'Gestión de Cuentas'
-                : vista === 'gastos'
-                ? 'Control de Gastos'
-                : 'Dashboard'}
+              {vista === 'clientes' ? 'Clientes' : vista === 'ventas' ? 'Ventas Rápidas' : vista === 'inventario' ? 'Inventario' : vista === 'gestion' ? 'Gestión de Cuentas' : vista === 'gastos' ? 'Control de Gastos' : 'Dashboard Financiero'}
             </h1>
           </div>
           <div className="bg-[#141414] border border-[#3b0909] px-4 py-1.5 rounded-2xl flex items-center gap-2.5 shadow-lg shadow-red-950/20">
             <div className="w-2.5 h-2.5 rounded-full bg-red-600 animate-ping"></div>
-            <span className="text-xs font-bold uppercase tracking-wider text-neutral-400">
-              Libre:
-            </span>
-            <span className="text-base font-extrabold text-white">
-              {cargando ? '...' : libres}
-            </span>
+            <span className="text-xs font-bold uppercase tracking-wider text-neutral-400">Libre:</span>
+            <span className="text-base font-extrabold text-white">{cargando ? '...' : libres}</span>
           </div>
         </header>
 
@@ -586,96 +615,46 @@ export default function App() {
                 <div className="space-y-8 animate-fade-in">
                   <div className="flex flex-wrap justify-between items-center gap-4">
                     <div className="p-3.5 rounded-2xl flex items-center gap-4 border border-[#331111] bg-gradient-to-r from-[#140a0a] to-[#0f0707] shadow-xl">
-                      <span className="text-xs font-bold uppercase tracking-wider text-neutral-300">
-                        TC (USDT/Soles):
-                      </span>
-                      <input
-                        type="number"
-                        step="0.01"
-                        value={tc}
-                        onChange={(e) => setTc(e.target.value)}
-                        className="w-24 px-3 py-1.5 bg-[#050505] border border-red-900/60 rounded-xl text-center font-extrabold text-white text-base focus:outline-none focus:ring-2 focus:ring-red-600 shadow-inner"
-                      />
+                      <span className="text-xs font-bold uppercase tracking-wider text-neutral-300">TC (USDT/Soles):</span>
+                      <input type="number" step="0.01" value={tc} onChange={(e) => setTc(e.target.value)} className="w-24 px-3 py-1.5 bg-[#050505] border border-red-900/60 rounded-xl text-center font-extrabold text-white text-base focus:outline-none focus:ring-2 focus:ring-red-600 shadow-inner" />
                     </div>
-                    <button
-                      onClick={() => setModalCaja(true)}
-                      className="bg-gradient-to-r from-[#800f11] to-red-600 hover:from-red-700 hover:to-red-500 text-white px-5 py-3 rounded-2xl text-sm font-bold transition border border-red-800/40 flex items-center gap-2 shadow-xl shadow-red-950"
-                    >
-                      <Wallet className="w-4 h-4 text-red-200" /> Añadir
-                      Gasto/Ingreso Extra
+                    <button onClick={() => setModalCaja(true)} className="bg-gradient-to-r from-[#800f11] to-red-600 hover:from-red-700 hover:to-red-500 text-white px-5 py-3 rounded-2xl text-sm font-bold transition border border-red-800/40 flex items-center gap-2 shadow-xl shadow-red-950">
+                      <Wallet className="w-4 h-4 text-red-200" /> Añadir Gasto/Ingreso Extra
                     </button>
                   </div>
 
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                     <div className="p-7 rounded-3xl border-t-4 border-t-red-600 border border-[#2b0d0d] bg-gradient-to-b from-[#140a0a] to-[#0a0505] shadow-2xl relative overflow-hidden">
-                      <h3 className="text-neutral-400 text-xs uppercase tracking-widest font-extrabold mb-3">
-                        Ventas + Ingresos (S/)
-                      </h3>
-                      <p className="text-4xl font-black text-white">
-                        S/ {ingresosTotalesSoles.toFixed(2)}
-                      </p>
+                      <h3 className="text-neutral-400 text-xs uppercase tracking-widest font-extrabold mb-3">Ventas + Ingresos (S/)</h3>
+                      <p className="text-4xl font-black text-white">S/ {ingresosTotalesSoles.toFixed(2)}</p>
                     </div>
                     <div className="p-7 rounded-3xl border-t-4 border-t-[#6b1414] border border-[#2b0d0d] bg-gradient-to-b from-[#140a0a] to-[#0a0505] shadow-2xl relative overflow-hidden">
-                      <h3 className="text-neutral-400 text-xs uppercase tracking-widest font-extrabold mb-3">
-                        Egresos Totales (S/)
-                      </h3>
-                      <p className="text-4xl font-black text-red-500">
-                        S/ {egresosTotalesSoles.toFixed(2)}
-                      </p>
+                      <h3 className="text-neutral-400 text-xs uppercase tracking-widest font-extrabold mb-3">Egresos Totales (S/)</h3>
+                      <p className="text-4xl font-black text-red-500">S/ {egresosTotalesSoles.toFixed(2)}</p>
                     </div>
                     <div className="p-7 rounded-3xl border-t-4 border-t-neutral-400 border border-[#2b0d0d] bg-gradient-to-b from-[#140a0a] to-[#0a0505] shadow-2xl relative overflow-hidden">
-                      <h3 className="text-neutral-400 text-xs uppercase tracking-widest font-extrabold mb-3">
-                        Ganancia Neta (S/)
-                      </h3>
-                      <p className="text-4xl font-black text-neutral-100">
-                        S/ {gananciaNeta.toFixed(2)}
-                      </p>
+                      <h3 className="text-neutral-400 text-xs uppercase tracking-widest font-extrabold mb-3">Ganancia Neta (S/)</h3>
+                      <p className="text-4xl font-black text-neutral-100">S/ {gananciaNeta.toFixed(2)}</p>
                     </div>
                   </div>
 
                   <div className="p-7 rounded-3xl border border-[#3b0909] bg-gradient-to-r from-[#140a0a] via-[#0d0707] to-[#080404] space-y-5 shadow-2xl">
                     <h3 className="text-lg font-extrabold text-white flex items-center gap-2.5">
-                      <AlertCircle className="w-6 h-6 text-red-500" /> Cobranza
-                      - Cuentas que Vencen Hoy ({hoyStr})
+                      <AlertCircle className="w-6 h-6 text-red-500" /> Cobranza - Vencen Hoy ({hoyStr})
                     </h3>
                     {cuentasQueVencenHoy.length === 0 ? (
-                      <p className="text-neutral-400 text-sm font-medium">
-                        No hay cuentas que expiren exactamente hoy.
-                      </p>
+                      <p className="text-neutral-400 text-sm font-medium">No hay cuentas que expiren exactamente hoy.</p>
                     ) : (
                       <div className="space-y-3">
                         {cuentasQueVencenHoy.map((cli) => (
-                          <div
-                            key={cli.id}
-                            className="flex flex-wrap justify-between items-center bg-[#0a0a0a] p-5 rounded-2xl border border-[#2b0d0d] gap-4 shadow-md"
-                          >
+                          <div key={cli.id} className="flex flex-wrap justify-between items-center bg-[#0a0a0a] p-5 rounded-2xl border border-[#2b0d0d] gap-4 shadow-md">
                             <div>
-                              <p className="font-bold text-white text-base">
-                                {cli.nombre}{' '}
-                                <span className="text-xs text-neutral-400 font-normal">
-                                  ({cli.whatsapp})
-                                </span>
-                              </p>
-                              <p className="text-xs text-red-400 font-mono mt-0.5">
-                                {cli.cuenta}
-                              </p>
+                              <p className="font-bold text-white text-base">{cli.nombre} <span className="text-xs text-neutral-400 font-normal">({cli.whatsapp})</span></p>
+                              <p className="text-xs text-red-400 font-mono mt-0.5">{cli.cuenta}</p>
                             </div>
                             <div className="flex items-center gap-3">
-                              <a
-                                href={`https://wa.me/${cli.whatsapp}?text=Hola%20${cli.nombre},%20tu%20cuenta%20vence%20hoy.%20¿Deseas%20renovar%20por%2030%20días%20más?`}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="bg-[#1f0a0a] hover:bg-[#331111] text-red-300 border border-red-900/40 px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-sm"
-                              >
-                                Cobrar Wp
-                              </a>
-                              <button
-                                onClick={() => renovarCobranza(cli)}
-                                className="bg-gradient-to-r from-[#800f11] to-red-600 hover:from-red-700 hover:to-red-500 text-white px-5 py-2 rounded-xl text-xs font-bold transition shadow-md shadow-red-950 flex items-center gap-1.5"
-                              >
-                                <RefreshCw className="w-3.5 h-3.5" /> Renovar 30
-                                días más
-                              </button>
+                              <a href={`https://wa.me/${cli.whatsapp}?text=Hola%20${cli.nombre},%20tu%20cuenta%20vence%20hoy.%20¿Deseas%20renovar%20por%2030%20días%20más?`} target="_blank" rel="noreferrer" className="bg-[#1f0a0a] hover:bg-[#331111] text-red-300 border border-red-900/40 px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-sm">Cobrar Wp</a>
+                              <button onClick={() => renovarCobranza(cli)} className="bg-gradient-to-r from-[#800f11] to-red-600 hover:from-red-700 hover:to-red-500 text-white px-5 py-2 rounded-xl text-xs font-bold transition shadow-md shadow-red-950 flex items-center gap-1.5"><RefreshCw className="w-3.5 h-3.5" /> Renovar 30 días</button>
                             </div>
                           </div>
                         ))}
@@ -685,44 +664,23 @@ export default function App() {
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <div className="p-7 rounded-3xl border border-[#2b0d0d] bg-[#0d0d0d] space-y-4 shadow-xl">
-                      <h3 className="text-base font-extrabold text-red-500 flex items-center gap-2">
-                        <Wallet className="w-5 h-5" /> Deudas Pendientes
-                      </h3>
+                      <h3 className="text-base font-extrabold text-red-500 flex items-center gap-2"><Wallet className="w-5 h-5" /> Deudas Pendientes</h3>
                       <div className="space-y-2">
-                        {clientes.filter((c) => c.pago === 'Pendiente')
-                          .length === 0 ? (
-                          <p className="text-neutral-400 text-sm font-medium">
-                            Todos al día 🎉
-                          </p>
+                        {clientes.filter((c) => c.pago === 'Pendiente').length === 0 ? (
+                          <p className="text-neutral-400 text-sm font-medium">Todos al día 🎉</p>
                         ) : (
-                          clientes
-                            .filter((c) => c.pago === 'Pendiente')
-                            .map((cli) => (
-                              <div
-                                key={cli.id}
-                                className="flex justify-between items-center py-3 border-b border-neutral-900 text-sm"
-                              >
-                                <span className="font-bold text-gray-200">
-                                  {cli.nombre}
-                                </span>
-                                <a
-                                  href={`https://wa.me/${cli.whatsapp}?text=Hola,%20tienes%20un%20pago%20pendiente.`}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  className="text-red-400 bg-red-950/40 border border-red-900/50 px-3.5 py-1.5 rounded-xl text-xs font-bold hover:bg-red-900/40 transition"
-                                >
-                                  Cobrar
-                                </a>
-                              </div>
-                            ))
+                          clientes.filter((c) => c.pago === 'Pendiente').map((cli) => (
+                            <div key={cli.id} className="flex justify-between items-center py-3 border-b border-neutral-900 text-sm">
+                              <span className="font-bold text-gray-200">{cli.nombre}</span>
+                              <a href={`https://wa.me/${cli.whatsapp}?text=Hola,%20tienes%20un%20pago%20pendiente.`} target="_blank" rel="noreferrer" className="text-red-400 bg-red-950/40 border border-red-900/50 px-3.5 py-1.5 rounded-xl text-xs font-bold hover:bg-red-900/40 transition">Cobrar</a>
+                            </div>
+                          ))
                         )}
                       </div>
                     </div>
 
                     <div className="p-7 rounded-3xl border border-[#2b0d0d] bg-[#0d0d0d] space-y-4 shadow-xl">
-                      <h3 className="text-base font-extrabold text-amber-500 flex items-center gap-2">
-                        <Clock className="w-5 h-5" /> Vencen próximos 3 días
-                      </h3>
+                      <h3 className="text-base font-extrabold text-amber-500 flex items-center gap-2"><Clock className="w-5 h-5" /> Vencen próximos 3 días</h3>
                       <div className="space-y-2">
                         {(() => {
                           const hoy = new Date();
@@ -735,23 +693,11 @@ export default function App() {
                             return d >= hoy && d <= lim;
                           });
 
-                          if (porVencer.length === 0)
-                            return (
-                              <p className="text-neutral-400 text-sm font-medium">
-                                Sin vencimientos cercanos.
-                              </p>
-                            );
+                          if (porVencer.length === 0) return <p className="text-neutral-400 text-sm font-medium">Sin vencimientos cercanos.</p>;
                           return porVencer.map((cli) => (
-                            <div
-                              key={cli.id}
-                              className="flex justify-between py-3 border-b border-neutral-900 text-sm"
-                            >
-                              <span className="font-bold text-gray-200">
-                                {cli.nombre}
-                              </span>
-                              <span className="text-amber-400 font-extrabold text-xs bg-amber-500/10 px-2.5 py-1 rounded-lg border border-amber-500/20">
-                                {cli.fin}
-                              </span>
+                            <div key={cli.id} className="flex justify-between py-3 border-b border-neutral-900 text-sm">
+                              <span className="font-bold text-gray-200">{cli.nombre}</span>
+                              <span className="text-amber-400 font-extrabold text-xs bg-amber-500/10 px-2.5 py-1 rounded-lg border border-amber-500/20">{cli.fin}</span>
                             </div>
                           ));
                         })()}
@@ -764,87 +710,35 @@ export default function App() {
               {vista === 'ventas' && (
                 <div className="space-y-6 animate-fade-in">
                   <div className="flex justify-between items-center">
-                    <h2 className="text-lg font-bold text-white">
-                      Cuentas Listas para Entregar
-                    </h2>
-                    <button
-                      onClick={cargarDatos}
-                      className="bg-[#141414] hover:bg-neutral-800 text-neutral-300 px-4 py-2.5 rounded-2xl text-sm transition border border-neutral-800 flex items-center gap-2 shadow-sm font-semibold"
-                    >
-                      <RefreshCw className="w-4 h-4" /> Actualizar
-                    </button>
+                    <h2 className="text-lg font-bold text-white">Cuentas Listas para Entregar</h2>
+                    <button onClick={cargarDatos} className="bg-[#141414] hover:bg-neutral-800 text-neutral-300 px-4 py-2.5 rounded-2xl text-sm transition border border-neutral-800 flex items-center gap-2 shadow-sm font-semibold"><RefreshCw className="w-4 h-4" /> Actualizar</button>
                   </div>
 
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                    {inventario.filter((i) => i.estado === 'Disponible')
-                      .length === 0 ? (
-                      <div className="col-span-full text-center py-16 text-neutral-400 p-8 rounded-3xl border border-[#2b0d0d] bg-[#0d0d0d]">
-                        No hay stock disponible en este momento.
-                      </div>
+                    {inventario.filter((i) => i.estado === 'Disponible').length === 0 ? (
+                      <div className="col-span-full text-center py-16 text-neutral-400 p-8 rounded-3xl border border-[#2b0d0d] bg-[#0d0d0d]">No hay stock disponible.</div>
                     ) : (
-                      inventario
-                        .filter((i) => i.estado === 'Disponible')
-                        .map((acc, idx) => {
-                          const hoy = new Date();
-                          if (hoy.getHours() >= 20)
-                            hoy.setDate(hoy.getDate() + 1);
-                          hoy.setMonth(hoy.getMonth() + 1);
-                          const meses = [
-                            'Ene',
-                            'Feb',
-                            'Mar',
-                            'Abr',
-                            'May',
-                            'Jun',
-                            'Jul',
-                            'Ago',
-                            'Sep',
-                            'Oct',
-                            'Nov',
-                            'Dic',
-                          ];
-                          const fechaF =
-                            ('0' + hoy.getDate()).slice(-2) +
-                            meses[hoy.getMonth()];
-                          const textoWP = `CCARG#N${idx + 1}( ${fechaF})\n${
-                            acc.correo
-                          }\n🔑 889900\nBOT TELEGRAM`;
+                      inventario.filter((i) => i.estado === 'Disponible').map((acc, idx) => {
+                        const hoy = new Date();
+                        if (hoy.getHours() >= 20) hoy.setDate(hoy.getDate() + 1);
+                        hoy.setMonth(hoy.getMonth() + 1);
+                        const meses = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
+                        const fechaF = ('0' + hoy.getDate()).slice(-2) + meses[hoy.getMonth()];
+                        const textoWP = `CCARG#N${idx + 1}( ${fechaF})\n${acc.correo}\n🔑 889900\nBOT TELEGRAM`;
 
-                          return (
-                            <div
-                              key={acc.id}
-                              className="p-6 rounded-3xl border border-[#2b0d0d] bg-gradient-to-b from-[#120707] to-[#080303] flex flex-col justify-between space-y-5 shadow-2xl"
-                            >
-                              <pre className="text-xs font-mono text-neutral-200 bg-[#050505] p-4 rounded-2xl whitespace-pre-wrap border border-neutral-900 shadow-inner">
-                                {textoWP}
-                              </pre>
-                              <div className="flex justify-between items-center pt-3 border-t border-neutral-950">
-                                <span className="text-xs font-extrabold text-red-500 bg-red-950/40 px-3 py-1.5 rounded-xl border border-red-900/40">
-                                  Stock #{idx + 1}
-                                </span>
-                                <button
-                                  onClick={() => {
-                                    navigator.clipboard.writeText(textoWP);
-                                    setCopiadoIdx(acc.id);
-                                    setTimeout(() => setCopiadoIdx(null), 1500);
-                                  }}
-                                  className={`text-white text-xs px-5 py-2.5 rounded-xl font-bold transition flex items-center gap-2 shadow-lg ${
-                                    copiadoIdx === acc.id
-                                      ? 'bg-neutral-800'
-                                      : 'bg-gradient-to-r from-[#800f11] to-red-600 hover:from-red-700 hover:to-red-500 shadow-red-950'
-                                  }`}
-                                >
-                                  {copiadoIdx === acc.id ? (
-                                    <Check className="w-4 h-4" />
-                                  ) : (
-                                    <Copy className="w-4 h-4" />
-                                  )}
-                                  {copiadoIdx === acc.id ? 'Copiado' : 'Copiar'}
-                                </button>
-                              </div>
+                        return (
+                          <div key={acc.id} className="p-6 rounded-3xl border border-[#2b0d0d] bg-gradient-to-b from-[#120707] to-[#080303] flex flex-col justify-between space-y-5 shadow-2xl">
+                            <pre className="text-xs font-mono text-neutral-200 bg-[#050505] p-4 rounded-2xl whitespace-pre-wrap border border-neutral-900 shadow-inner">{textoWP}</pre>
+                            <div className="flex justify-between items-center pt-3 border-t border-neutral-950">
+                              <span className="text-xs font-extrabold text-red-500 bg-red-950/40 px-3 py-1.5 rounded-xl border border-red-900/40">Stock #{idx + 1}</span>
+                              <button onClick={() => { navigator.clipboard.writeText(textoWP); setCopiadoIdx(acc.id); setTimeout(() => setCopiadoIdx(null), 1500); mostrarNotificacion('Copiado al portapapeles', 'success')}} className={`text-white text-xs px-5 py-2.5 rounded-xl font-bold transition flex items-center gap-2 shadow-lg ${copiadoIdx === acc.id ? 'bg-neutral-800' : 'bg-gradient-to-r from-[#800f11] to-red-600 hover:from-red-700 hover:to-red-500 shadow-red-950'}`}>
+                                {copiadoIdx === acc.id ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                                {copiadoIdx === acc.id ? 'Copiado' : 'Copiar'}
+                              </button>
                             </div>
-                          );
-                        })
+                          </div>
+                        );
+                      })
                     )}
                   </div>
                 </div>
@@ -855,35 +749,21 @@ export default function App() {
                   <div className="p-5 border-b border-[#2b0d0d] flex flex-col md:flex-row justify-between items-center bg-[#140a0a] gap-4">
                     <div className="relative w-full md:w-1/3">
                       <Search className="absolute left-3.5 top-3 w-4 h-4 text-neutral-500" />
-                      <input
-                        type="text"
-                        value={busquedaInv}
-                        onChange={(e) => setBusquedaInv(e.target.value)}
-                        placeholder="Buscar correo o proveedor..."
-                        className="w-full pl-11 pr-4 py-2.5 bg-[#050505] border border-neutral-800 rounded-xl text-sm text-neutral-100 outline-none focus:ring-2 focus:ring-red-600 shadow-inner"
-                      />
+                      <input type="text" value={busquedaInv} onChange={(e) => setBusquedaInv(e.target.value)} placeholder="Buscar correo o proveedor..." className="w-full pl-11 pr-4 py-2.5 bg-[#050505] border border-neutral-800 rounded-xl text-sm text-neutral-100 outline-none focus:ring-2 focus:ring-red-600 shadow-inner" />
                     </div>
-                    <div className="flex items-center gap-3 w-full md:w-auto justify-end">
-                      <button
-                        onClick={() =>
-                          exportarACSV(inventario, 'inventario_aluria')
-                        }
-                        className="bg-[#141414] hover:bg-neutral-800 text-neutral-200 px-4 py-2.5 rounded-xl text-sm font-semibold transition border border-neutral-800 flex items-center gap-2 shadow-sm"
-                      >
-                        <Download className="w-4 h-4" /> Exportar CSV
+                    <div className="flex flex-wrap items-center gap-3 w-full md:w-auto justify-end">
+                      <button onClick={limpiarDuplicados} className="bg-red-950 hover:bg-red-900 text-red-400 px-4 py-2.5 rounded-xl text-sm font-semibold transition border border-red-900/50 flex items-center gap-2 shadow-sm">
+                        <Trash2 className="w-4 h-4" /> Limpiar Duplicados
                       </button>
-                      <button
-                        onClick={() => setModalInv(true)}
-                        className="bg-gradient-to-r from-[#800f11] to-red-600 hover:from-red-700 hover:to-red-500 text-white px-5 py-2.5 rounded-xl text-sm font-bold transition shadow-md shadow-red-950 flex items-center gap-2"
-                      >
-                        <Plus className="w-4 h-4" /> Importar Lote
-                      </button>
+                      <button onClick={() => exportarACSV(inventario, 'inventario_aluria')} className="bg-[#141414] hover:bg-neutral-800 text-neutral-200 px-4 py-2.5 rounded-xl text-sm font-semibold transition border border-neutral-800 flex items-center gap-2 shadow-sm"><Download className="w-4 h-4" /> Exportar CSV</button>
+                      <button onClick={() => setModalInv(true)} className="bg-gradient-to-r from-[#800f11] to-red-600 hover:from-red-700 hover:to-red-500 text-white px-5 py-2.5 rounded-xl text-sm font-bold transition shadow-md shadow-red-950 flex items-center gap-2"><Plus className="w-4 h-4" /> Importar Lote</button>
                     </div>
                   </div>
                   <div className="overflow-x-auto">
                     <table className="w-full text-left text-sm">
                       <thead className="bg-[#140a0a] text-red-500 border-b border-[#2b0d0d] uppercase tracking-wider text-xs font-bold">
                         <tr>
+                          <th className="px-6 py-4 w-12 text-neutral-400">#</th>
                           <th className="px-6 py-4">Correo</th>
                           <th className="px-6 py-4">Proveedor</th>
                           <th className="px-6 py-4">Costo ($)</th>
@@ -895,56 +775,19 @@ export default function App() {
                       </thead>
                       <tbody className="divide-y divide-neutral-900">
                         {inventarioFiltrado.length === 0 ? (
-                          <tr>
-                            <td
-                              colSpan="7"
-                              className="text-center py-12 text-neutral-500 font-medium"
-                            >
-                              Sin resultados en inventario.
-                            </td>
-                          </tr>
+                          <tr><td colSpan="8" className="text-center py-12 text-neutral-500 font-medium">Sin resultados en inventario.</td></tr>
                         ) : (
-                          inventarioFiltrado.map((item) => (
-                            <tr
-                              key={item.id}
-                              className="hover:bg-neutral-900/40 transition"
-                            >
-                              <td className="px-6 py-4 font-bold text-white">
-                                {item.correo}
-                              </td>
-                              <td className="px-6 py-4 text-neutral-400">
-                                {item.proveedor}
-                              </td>
-                              <td className="px-6 py-4 text-neutral-300 font-mono">
-                                ${item.costo}
-                              </td>
-                              <td className="px-6 py-4 text-neutral-300 font-mono">
-                                S/{item.precio}
-                              </td>
-                              <td className="px-6 py-4">
-                                <span
-                                  className={`px-3 py-1 rounded-full text-xs font-bold ${
-                                    item.estado === 'Disponible'
-                                      ? 'bg-red-500/10 text-red-500 border border-red-500/20'
-                                      : 'bg-neutral-800 text-neutral-400 border border-neutral-700'
-                                  }`}
-                                >
-                                  {item.estado}
-                                </span>
-                              </td>
-                              <td className="px-6 py-4 text-neutral-400">
-                                {item.cliente || '-'}
-                              </td>
+                          inventarioFiltrado.map((item, idx) => (
+                            <tr key={item.id} className="hover:bg-neutral-900/40 transition">
+                              <td className="px-6 py-4 text-neutral-500 font-bold">{idx + 1}</td>
+                              <td className="px-6 py-4 font-bold text-white">{item.correo}</td>
+                              <td className="px-6 py-4 text-neutral-400">{item.proveedor}</td>
+                              <td className="px-6 py-4 text-neutral-300 font-mono">${item.costo}</td>
+                              <td className="px-6 py-4 text-neutral-300 font-mono">S/{item.precio_venta}</td>
+                              <td className="px-6 py-4"><span className={`px-3 py-1 rounded-full text-xs font-bold ${item.estado === 'Disponible' ? 'bg-red-500/10 text-red-500 border border-red-500/20' : 'bg-neutral-800 text-neutral-400 border border-neutral-700'}`}>{item.estado}</span></td>
+                              <td className="px-6 py-4 text-neutral-400">{item.cliente_asignado || '-'}</td>
                               <td className="px-6 py-4 text-center">
-                                <button
-                                  onClick={() =>
-                                    eliminarCuentaInv(item.id, item.correo)
-                                  }
-                                  className="p-2.5 bg-red-950/40 hover:bg-red-900/40 text-red-400 rounded-xl transition border border-red-900/30 shadow-sm"
-                                  title="Eliminar"
-                                >
-                                  <Trash2 className="w-4 h-4" />
-                                </button>
+                                <button onClick={() => eliminarCuentaInv(item.id, item.correo)} className="p-2.5 bg-red-950/40 hover:bg-red-900/40 text-red-400 rounded-xl transition border border-red-900/30 shadow-sm"><Trash2 className="w-4 h-4" /></button>
                               </td>
                             </tr>
                           ))
@@ -960,42 +803,12 @@ export default function App() {
                   <div className="p-5 border-b border-[#2b0d0d] flex flex-col md:flex-row justify-between items-center bg-[#140a0a] gap-4">
                     <div className="relative w-full md:w-1/3">
                       <Search className="absolute left-3.5 top-3 w-4 h-4 text-neutral-500" />
-                      <input
-                        type="text"
-                        value={busquedaCli}
-                        onChange={(e) => setBusquedaCli(e.target.value)}
-                        placeholder="Buscar cliente..."
-                        className="w-full pl-11 pr-4 py-2.5 bg-[#050505] border border-neutral-800 rounded-xl text-sm text-neutral-100 outline-none focus:ring-2 focus:ring-red-600 shadow-inner"
-                      />
+                      <input type="text" value={busquedaCli} onChange={(e) => setBusquedaCli(e.target.value)} placeholder="Buscar cliente..." className="w-full pl-11 pr-4 py-2.5 bg-[#050505] border border-neutral-800 rounded-xl text-sm text-neutral-100 outline-none focus:ring-2 focus:ring-red-600 shadow-inner" />
                     </div>
                     <div className="flex flex-wrap items-center gap-3 w-full md:w-auto justify-end">
-                      <button
-                        onClick={() =>
-                          exportarACSV(clientes, 'clientes_aluria')
-                        }
-                        className="bg-[#141414] hover:bg-neutral-800 text-neutral-200 px-4 py-2.5 rounded-xl text-sm font-semibold transition border border-neutral-800 flex items-center gap-2 shadow-sm"
-                      >
-                        <Download className="w-4 h-4" /> Exportar CSV
-                      </button>
-                      <button
-                        onClick={() => setModoResumen(!modoResumen)}
-                        className={`px-4 py-2.5 rounded-xl text-sm font-bold transition flex items-center gap-2 ${
-                          modoResumen
-                            ? 'bg-red-900 text-white border border-red-700'
-                            : 'bg-neutral-900 text-neutral-300 border border-neutral-800 hover:bg-neutral-800'
-                        }`}
-                      >
-                        <TrendingUp className="w-4 h-4" />{' '}
-                        {modoResumen
-                          ? 'Ver Directorio Normal'
-                          : 'Ver Resumen LTV'}
-                      </button>
-                      <button
-                        onClick={() => setModalCli(true)}
-                        className="bg-gradient-to-r from-[#800f11] to-red-600 hover:from-red-700 hover:to-red-500 text-white px-5 py-2.5 rounded-xl text-sm font-bold transition shadow-md shadow-red-950 flex items-center gap-2"
-                      >
-                        <Plus className="w-4 h-4" /> Asignar / Nuevo
-                      </button>
+                      <button onClick={() => exportarACSV(clientes, 'clientes_aluria')} className="bg-[#141414] hover:bg-neutral-800 text-neutral-200 px-4 py-2.5 rounded-xl text-sm font-semibold transition border border-neutral-800 flex items-center gap-2 shadow-sm"><Download className="w-4 h-4" /> Exportar CSV</button>
+                      <button onClick={() => setModoResumen(!modoResumen)} className={`px-4 py-2.5 rounded-xl text-sm font-bold transition flex items-center gap-2 ${modoResumen ? 'bg-red-900 text-white border border-red-700' : 'bg-neutral-900 text-neutral-300 border border-neutral-800 hover:bg-neutral-800'}`}><TrendingUp className="w-4 h-4" /> {modoResumen ? 'Ver Directorio Normal' : 'Ver Resumen LTV'}</button>
+                      <button onClick={() => setModalCli(true)} className="bg-gradient-to-r from-[#800f11] to-red-600 hover:from-red-700 hover:to-red-500 text-white px-5 py-2.5 rounded-xl text-sm font-bold transition shadow-md shadow-red-950 flex items-center gap-2"><Plus className="w-4 h-4" /> Asignar / Nuevo</button>
                     </div>
                   </div>
 
@@ -1013,54 +826,15 @@ export default function App() {
                         </thead>
                         <tbody className="divide-y divide-neutral-900">
                           {clientesFiltrados.length === 0 ? (
-                            <tr>
-                              <td
-                                colSpan="5"
-                                className="text-center py-12 text-neutral-500 font-medium"
-                              >
-                                Sin resultados
-                              </td>
-                            </tr>
+                            <tr><td colSpan="5" className="text-center py-12 text-neutral-500 font-medium">Sin resultados</td></tr>
                           ) : (
                             clientesFiltrados.map((c) => (
-                              <tr
-                                key={c.id}
-                                className="hover:bg-neutral-900/40 transition"
-                              >
-                                <td className="px-6 py-4 font-bold text-white">
-                                  {c.nombre}
-                                  <span className="block text-xs text-neutral-400 font-normal">
-                                    {c.whatsapp}
-                                  </span>
-                                </td>
-                                <td className="px-6 py-4 font-mono text-xs text-red-400">
-                                  {c.cuenta}
-                                </td>
-                                <td className="px-6 py-4 text-neutral-200 font-semibold">
-                                  {c.fin}
-                                </td>
-                                <td className="px-6 py-4">
-                                  <span
-                                    className={`px-3 py-1 rounded-full text-xs font-bold ${
-                                      c.pago === 'Pendiente'
-                                        ? 'bg-red-500/10 text-red-500 border border-red-500/20'
-                                        : 'bg-neutral-800 text-neutral-300 border border-neutral-700'
-                                    }`}
-                                  >
-                                    {c.pago}
-                                  </span>
-                                </td>
-                                <td className="px-6 py-4 text-center">
-                                  <button
-                                    onClick={() =>
-                                      eliminarClienteYLiberar(c.id, c.cuenta)
-                                    }
-                                    className="p-2.5 bg-red-950/40 hover:bg-red-900/40 text-red-400 rounded-xl transition border border-red-900/30 shadow-sm"
-                                    title="Eliminar y Liberar"
-                                  >
-                                    <Trash2 className="w-4 h-4" />
-                                  </button>
-                                </td>
+                              <tr key={c.id} className="hover:bg-neutral-900/40 transition">
+                                <td className="px-6 py-4 font-bold text-white">{c.nombre}<span className="block text-xs text-neutral-400 font-normal">{c.whatsapp}</span></td>
+                                <td className="px-6 py-4 font-mono text-xs text-red-400">{c.cuenta}</td>
+                                <td className="px-6 py-4 text-neutral-200 font-semibold">{c.fin}</td>
+                                <td className="px-6 py-4"><span className={`px-3 py-1 rounded-full text-xs font-bold ${c.pago === 'Pendiente' ? 'bg-red-500/10 text-red-500 border border-red-500/20' : 'bg-neutral-800 text-neutral-300 border border-neutral-700'}`}>{c.pago}</span></td>
+                                <td className="px-6 py-4 text-center"><button onClick={() => eliminarClienteYLiberar(c.id, c.cuenta)} className="p-2.5 bg-red-950/40 hover:bg-red-900/40 text-red-400 rounded-xl transition border border-red-900/30 shadow-sm" title="Eliminar y Liberar"><Trash2 className="w-4 h-4" /></button></td>
                               </tr>
                             ))
                           )}
@@ -1073,76 +847,27 @@ export default function App() {
                         <thead className="bg-[#140a0a] text-red-500 border-b border-[#2b0d0d] uppercase tracking-wider text-xs font-bold">
                           <tr>
                             <th className="px-6 py-4">Top Clientes</th>
-                            <th className="px-6 py-4 text-center">
-                              Cuentas Activas
-                            </th>
-                            <th className="px-6 py-4 text-center">
-                              Aporte Mensual (S/)
-                            </th>
+                            <th className="px-6 py-4 text-center">Cuentas Activas</th>
+                            <th className="px-6 py-4 text-center">Aporte Mensual (S/)</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-neutral-900">
                           {(() => {
                             let ltv = {};
                             clientes.forEach((cli) => {
-                              if (!ltv[cli.whatsapp])
-                                ltv[cli.whatsapp] = {
-                                  nom: cli.nombre,
-                                  w: cli.whatsapp,
-                                  numCuentas: 0,
-                                  aporte: 0,
-                                };
+                              if (!ltv[cli.whatsapp]) ltv[cli.whatsapp] = { nom: cli.nombre, w: cli.whatsapp, numCuentas: 0, aporte: 0 };
                               ltv[cli.whatsapp].numCuentas++;
-                              const correoBase = cli.cuenta
-                                ? cli.cuenta.split(' (')[0].trim()
-                                : '';
-                              const invMatch = inventario.find(
-                                (it) =>
-                                  it.correo.trim().toLowerCase() ===
-                                  correoBase.toLowerCase()
-                              );
-                              if (invMatch)
-                                ltv[cli.whatsapp].aporte +=
-                                  parseFloat(invMatch.precio) || 0;
+                              const correoBase = cli.cuenta ? cli.cuenta.split(' (')[0].trim() : '';
+                              const invMatch = inventario.find((it) => it.correo.trim().toLowerCase() === correoBase.toLowerCase());
+                              if (invMatch) ltv[cli.whatsapp].aporte += parseFloat(invMatch.precio_venta) || 0;
                             });
-                            const top = Object.values(ltv).sort(
-                              (a, b) => b.aporte - a.aporte
-                            );
-                            if (top.length === 0)
-                              return (
-                                <tr>
-                                  <td
-                                    colSpan="3"
-                                    className="text-center py-12 text-neutral-500 font-medium"
-                                  >
-                                    Sin datos para LTV
-                                  </td>
-                                </tr>
-                              );
+                            const top = Object.values(ltv).sort((a, b) => b.aporte - a.aporte);
+                            if (top.length === 0) return <tr><td colSpan="3" className="text-center py-12 text-neutral-500 font-medium">Sin datos para LTV</td></tr>;
                             return top.map((t, idx) => (
-                              <tr
-                                key={idx}
-                                className="hover:bg-neutral-900/40 transition"
-                              >
-                                <td className="px-6 py-4 font-bold text-white">
-                                  {idx === 0
-                                    ? '🥇'
-                                    : idx === 1
-                                    ? '🥈'
-                                    : idx === 2
-                                    ? '🥉'
-                                    : `#${idx + 1}`}{' '}
-                                  {t.nom}{' '}
-                                  <span className="block text-xs text-neutral-400 font-normal">
-                                    {t.w}
-                                  </span>
-                                </td>
-                                <td className="px-6 py-4 text-center font-extrabold text-red-400 text-base">
-                                  {t.numCuentas}
-                                </td>
-                                <td className="px-6 py-4 text-center font-extrabold text-white text-base">
-                                  S/ {t.aporte.toFixed(2)}
-                                </td>
+                              <tr key={idx} className="hover:bg-neutral-900/40 transition">
+                                <td className="px-6 py-4 font-bold text-white">{idx === 0 ? '🥇' : idx === 1 ? '🥈' : idx === 2 ? '🥉' : `#${idx + 1}`} {t.nom} <span className="block text-xs text-neutral-400 font-normal">{t.w}</span></td>
+                                <td className="px-6 py-4 text-center font-extrabold text-red-400 text-base">{t.numCuentas}</td>
+                                <td className="px-6 py-4 text-center font-extrabold text-white text-base">S/ {t.aporte.toFixed(2)}</td>
                               </tr>
                             ));
                           })()}
@@ -1158,90 +883,38 @@ export default function App() {
                   <div className="p-5 border-b border-[#2b0d0d] flex flex-wrap justify-between items-center bg-[#140a0a] gap-4">
                     <div className="relative w-full md:w-1/3">
                       <Search className="absolute left-3.5 top-3 w-4 h-4 text-neutral-500" />
-                      <input
-                        type="text"
-                        value={busquedaGestion}
-                        onChange={(e) => setBusquedaGestion(e.target.value)}
-                        placeholder="Buscar por correo o proveedor..."
-                        className="w-full pl-11 pr-4 py-2.5 bg-[#050505] border border-neutral-800 rounded-xl text-sm text-neutral-100 outline-none focus:ring-2 focus:ring-red-600 shadow-inner"
-                      />
+                      <input type="text" value={busquedaGestion} onChange={(e) => setBusquedaGestion(e.target.value)} placeholder="Buscar por correo o proveedor..." className="w-full pl-11 pr-4 py-2.5 bg-[#050505] border border-neutral-800 rounded-xl text-sm text-neutral-100 outline-none focus:ring-2 focus:ring-red-600 shadow-inner" />
                     </div>
-                    <span className="text-xs font-semibold text-neutral-400 bg-neutral-900 px-4 py-2 rounded-xl border border-neutral-800">
-                      Total registros en stock masivo:{' '}
-                      <strong className="text-white">
-                        {inventario.length}
-                      </strong>{' '}
-                      cuentas
-                    </span>
+                    <div className="flex items-center gap-3 w-full md:w-auto justify-end">
+                      <button onClick={limpiarDuplicados} className="bg-red-950 hover:bg-red-900 text-red-400 px-4 py-2.5 rounded-xl text-sm font-semibold transition border border-red-900/50 flex items-center gap-2 shadow-sm">
+                        <Trash2 className="w-4 h-4" /> Limpiar Duplicados
+                      </button>
+                      <span className="text-xs font-semibold text-neutral-400 bg-neutral-900 px-4 py-2 rounded-xl border border-neutral-800">Total registros: <strong className="text-white">{inventario.length}</strong> cuentas</span>
+                    </div>
                   </div>
                   <div className="overflow-x-auto">
                     <table className="w-full text-left text-sm">
                       <thead className="bg-[#140a0a] text-red-500 border-b border-[#2b0d0d] uppercase tracking-wider text-xs font-bold">
                         <tr>
+                          <th className="px-6 py-4 w-12 text-neutral-400">#</th>
                           <th className="px-6 py-4">Correo Cuenta</th>
                           <th className="px-6 py-4">Proveedor</th>
                           <th className="px-6 py-4">Costo ($)</th>
-                          <th className="px-6 py-4">Estado Proveedor</th>
-                          <th className="px-6 py-4 text-center">
-                            Acciones Contables
-                          </th>
+                          <th className="px-6 py-4 text-center">Acciones</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-neutral-900">
                         {inventarioGestion.length === 0 ? (
-                          <tr>
-                            <td
-                              colSpan="5"
-                              className="text-center py-12 text-neutral-500 font-medium"
-                            >
-                              Sin cuentas registradas en el sistema.
-                            </td>
-                          </tr>
+                          <tr><td colSpan="5" className="text-center py-12 text-neutral-500 font-medium">Sin cuentas registradas en el sistema.</td></tr>
                         ) : (
-                          inventarioGestion.map((item) => (
-                            <tr
-                              key={item.id}
-                              className="hover:bg-neutral-900/40 transition"
-                            >
-                              <td className="px-6 py-4 font-bold text-white">
-                                {item.correo}
-                              </td>
-                              <td className="px-6 py-4 text-neutral-400">
-                                {item.proveedor}
-                              </td>
-                              <td className="px-6 py-4 text-neutral-300 font-mono">
-                                ${item.costo}
-                              </td>
-                              <td className="px-6 py-4">
-                                {item.proveedor_pagado ? (
-                                  <span className="px-3 py-1 rounded-full text-xs font-bold bg-neutral-800 text-neutral-200 border border-neutral-700">
-                                    Pagado a Proveedor
-                                  </span>
-                                ) : (
-                                  <span className="px-3 py-1 rounded-full text-xs font-bold bg-red-500/10 text-red-500 border border-red-500/20">
-                                    Pendiente Proveedor
-                                  </span>
-                                )}
-                              </td>
+                          inventarioGestion.map((item, idx) => (
+                            <tr key={item.id} className="hover:bg-neutral-900/40 transition">
+                              <td className="px-6 py-4 text-neutral-500 font-bold">{idx + 1}</td>
+                              <td className="px-6 py-4 font-bold text-white">{item.correo}</td>
+                              <td className="px-6 py-4 text-neutral-400">{item.proveedor}</td>
+                              <td className="px-6 py-4 text-neutral-300 font-mono">${item.costo}</td>
                               <td className="px-6 py-4 text-center space-x-3">
-                                {!item.proveedor_pagado && (
-                                  <button
-                                    onClick={() =>
-                                      marcarPagadoProveedor(item.id)
-                                    }
-                                    className="px-4 py-2 bg-gradient-to-r from-[#800f11] to-red-600 hover:from-red-700 hover:to-red-500 text-white rounded-xl text-xs font-bold transition shadow-md shadow-red-950"
-                                  >
-                                    Resaltar Pagada
-                                  </button>
-                                )}
-                                <button
-                                  onClick={() =>
-                                    sacarDelStock(item.id, item.correo)
-                                  }
-                                  className="px-4 py-2 bg-neutral-800 hover:bg-neutral-700 text-red-400 border border-neutral-700 rounded-xl text-xs font-bold transition shadow-sm"
-                                >
-                                  No será renovada (Salir de Stock)
-                                </button>
+                                <button onClick={() => sacarDelStock(item.id, item.correo)} className="px-4 py-2 bg-neutral-800 hover:bg-neutral-700 text-red-400 border border-neutral-700 rounded-xl text-xs font-bold transition shadow-sm">Eliminar del Stock Definitivo</button>
                               </td>
                             </tr>
                           ))
@@ -1255,105 +928,32 @@ export default function App() {
               {vista === 'gastos' && (
                 <div className="space-y-8 animate-fade-in">
                   <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-                    <div className="p-6 rounded-3xl border-t-4 border-t-amber-500 border border-[#2b0d0d] bg-[#0d0d0d] shadow-xl">
-                      <h3 className="text-neutral-400 text-xs uppercase tracking-widest font-extrabold mb-2">
-                        Comida
-                      </h3>
-                      <p className="text-3xl font-extrabold text-amber-400">
-                        S/ {gastosComida.toFixed(2)}
-                      </p>
-                    </div>
-                    <div className="p-6 rounded-3xl border-t-4 border-t-red-600 border border-[#2b0d0d] bg-[#0d0d0d] shadow-xl">
-                      <h3 className="text-neutral-400 text-xs uppercase tracking-widest font-extrabold mb-2">
-                        Pasajes
-                      </h3>
-                      <p className="text-3xl font-extrabold text-red-400">
-                        S/ {gastosPasajes.toFixed(2)}
-                      </p>
-                    </div>
-                    <div className="p-6 rounded-3xl border-t-4 border-t-purple-500 border border-[#2b0d0d] bg-[#0d0d0d] shadow-xl">
-                      <h3 className="text-neutral-400 text-xs uppercase tracking-widest font-extrabold mb-2">
-                        Detalles
-                      </h3>
-                      <p className="text-3xl font-extrabold text-purple-400">
-                        S/ {gastosDetalles.toFixed(2)}
-                      </p>
-                    </div>
-                    <div className="p-6 rounded-3xl border-t-4 border-t-neutral-400 border border-[#2b0d0d] bg-[#0d0d0d] shadow-xl">
-                      <h3 className="text-neutral-400 text-xs uppercase tracking-widest font-extrabold mb-2">
-                        Otros
-                      </h3>
-                      <p className="text-3xl font-extrabold text-neutral-200">
-                        S/ {gastosOtros.toFixed(2)}
-                      </p>
-                    </div>
+                    <div className="p-6 rounded-3xl border-t-4 border-t-amber-500 border border-[#2b0d0d] bg-[#0d0d0d] shadow-xl"><h3 className="text-neutral-400 text-xs uppercase tracking-widest font-extrabold mb-2">Comida</h3><p className="text-3xl font-extrabold text-amber-400">S/ {gastosComida.toFixed(2)}</p></div>
+                    <div className="p-6 rounded-3xl border-t-4 border-t-red-600 border border-[#2b0d0d] bg-[#0d0d0d] shadow-xl"><h3 className="text-neutral-400 text-xs uppercase tracking-widest font-extrabold mb-2">Pasajes</h3><p className="text-3xl font-extrabold text-red-400">S/ {gastosPasajes.toFixed(2)}</p></div>
+                    <div className="p-6 rounded-3xl border-t-4 border-t-purple-500 border border-[#2b0d0d] bg-[#0d0d0d] shadow-xl"><h3 className="text-neutral-400 text-xs uppercase tracking-widest font-extrabold mb-2">Detalles</h3><p className="text-3xl font-extrabold text-purple-400">S/ {gastosDetalles.toFixed(2)}</p></div>
+                    <div className="p-6 rounded-3xl border-t-4 border-t-neutral-400 border border-[#2b0d0d] bg-[#0d0d0d] shadow-xl"><h3 className="text-neutral-400 text-xs uppercase tracking-widest font-extrabold mb-2">Otros</h3><p className="text-3xl font-extrabold text-neutral-200">S/ {gastosOtros.toFixed(2)}</p></div>
                   </div>
 
                   <div className="rounded-3xl overflow-hidden border border-[#2b0d0d] bg-[#0d0d0d] shadow-2xl">
                     <div className="p-5 border-b border-[#2b0d0d] flex justify-between items-center bg-[#140a0a]">
-                      <h3 className="font-bold text-white text-base">
-                        Historial de Transacciones y Gastos Acumulados
-                      </h3>
-                      <button
-                        onClick={() => setModalCaja(true)}
-                        className="bg-gradient-to-r from-[#800f11] to-red-600 hover:from-red-700 hover:to-red-500 text-white px-5 py-2.5 rounded-xl text-sm font-bold transition shadow-md shadow-red-950 flex items-center gap-2"
-                      >
-                        <Plus className="w-4 h-4" /> Registrar Nuevo Gasto
-                      </button>
+                      <h3 className="font-bold text-white text-base">Historial de Transacciones y Gastos Acumulados</h3>
+                      <button onClick={() => setModalCaja(true)} className="bg-gradient-to-r from-[#800f11] to-red-600 hover:from-red-700 hover:to-red-500 text-white px-5 py-2.5 rounded-xl text-sm font-bold transition shadow-md shadow-red-950 flex items-center gap-2"><Plus className="w-4 h-4" /> Registrar Nuevo Gasto</button>
                     </div>
                     <div className="overflow-x-auto">
                       <table className="w-full text-left text-sm">
                         <thead className="bg-[#140a0a] text-red-500 border-b border-[#2b0d0d] uppercase tracking-wider text-xs font-bold">
-                          <tr>
-                            <th className="px-6 py-4">Fecha</th>
-                            <th className="px-6 py-4">Concepto / Categoría</th>
-                            <th className="px-6 py-4">Tipo</th>
-                            <th className="px-6 py-4 text-right">Monto (S/)</th>
-                          </tr>
+                          <tr><th className="px-6 py-4">Fecha</th><th className="px-6 py-4">Concepto / Categoría</th><th className="px-6 py-4">Tipo</th><th className="px-6 py-4 text-right">Monto (S/)</th></tr>
                         </thead>
                         <tbody className="divide-y divide-neutral-900">
                           {pagos.length === 0 ? (
-                            <tr>
-                              <td
-                                colSpan="4"
-                                className="text-center py-12 text-neutral-500 font-medium"
-                              >
-                                No hay gastos ni ingresos extras registrados.
-                              </td>
-                            </tr>
+                            <tr><td colSpan="4" className="text-center py-12 text-neutral-500 font-medium">No hay gastos ni ingresos extras registrados.</td></tr>
                           ) : (
                             pagos.map((p) => (
-                              <tr
-                                key={p.id}
-                                className="hover:bg-neutral-900/40 transition"
-                              >
-                                <td className="px-6 py-4 text-neutral-400 font-mono">
-                                  {p.fecha}
-                                </td>
-                                <td className="px-6 py-4 font-bold text-white">
-                                  {p.concepto}
-                                </td>
-                                <td className="px-6 py-4">
-                                  <span
-                                    className={`px-2.5 py-1 rounded-lg text-xs font-bold ${
-                                      p.tipo === 'Ingreso'
-                                        ? 'bg-red-500/10 text-red-500 border border-red-500/20'
-                                        : 'bg-neutral-800 text-neutral-300 border border-neutral-700'
-                                    }`}
-                                  >
-                                    {p.tipo}
-                                  </span>
-                                </td>
-                                <td
-                                  className={`px-6 py-4 text-right font-extrabold font-mono text-base ${
-                                    p.tipo === 'Ingreso'
-                                      ? 'text-red-500'
-                                      : 'text-neutral-200'
-                                  }`}
-                                >
-                                  {p.tipo === 'Ingreso' ? '+' : '-'} S/{' '}
-                                  {parseFloat(p.monto).toFixed(2)}
-                                </td>
+                              <tr key={p.id} className="hover:bg-neutral-900/40 transition">
+                                <td className="px-6 py-4 text-neutral-400 font-mono">{p.fecha}</td>
+                                <td className="px-6 py-4 font-bold text-white">{p.concepto}</td>
+                                <td className="px-6 py-4"><span className={`px-2.5 py-1 rounded-lg text-xs font-bold ${p.tipo === 'Ingreso' ? 'bg-red-500/10 text-red-500 border border-red-500/20' : 'bg-neutral-800 text-neutral-300 border border-neutral-700'}`}>{p.tipo}</span></td>
+                                <td className={`px-6 py-4 text-right font-extrabold font-mono text-base ${p.tipo === 'Ingreso' ? 'text-red-500' : 'text-neutral-200'}`}>{p.tipo === 'Ingreso' ? '+' : '-'} S/ {parseFloat(p.monto).toFixed(2)}</td>
                               </tr>
                             ))
                           )}
@@ -1368,91 +968,42 @@ export default function App() {
         </div>
       </main>
 
+      {/* MODAL IMPORTAR INVENTARIO CON REGEX */}
       {modalInv && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-50 flex justify-center items-center p-4">
           <div className="bg-[#0d0d0d] border border-[#3b0909] rounded-3xl w-full max-w-lg p-8 space-y-6 shadow-2xl shadow-red-950">
             <div className="flex justify-between items-center border-b border-[#2b0d0d] pb-4">
-              <h3 className="text-xl font-extrabold text-white">
-                Importar Inventario Lote
-              </h3>
-              <button
-                onClick={() => setModalInv(false)}
-                className="text-neutral-400 hover:text-white"
-              >
-                <X className="w-6 h-6" />
-              </button>
+              <h3 className="text-xl font-extrabold text-white">Importar Inventario Lote</h3>
+              <button onClick={() => setModalInv(false)} className="text-neutral-400 hover:text-white"><X className="w-6 h-6" /></button>
             </div>
             <form onSubmit={procesarPegaInventario} className="space-y-5">
               <div>
-                <label className="text-xs font-bold uppercase tracking-wider text-neutral-400 mb-2 block">
-                  Proveedor
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={loteProv}
-                  onChange={(e) => setLoteProv(e.target.value)}
-                  placeholder="Nombre del proveedor"
-                  className="w-full bg-[#050505] border border-neutral-800 rounded-xl p-3 text-sm text-white outline-none focus:ring-2 focus:ring-red-600 shadow-inner"
-                />
+                <label className="text-xs font-bold uppercase tracking-wider text-neutral-400 mb-2 block">Proveedor</label>
+                <input type="text" required value={loteProv} onChange={(e) => setLoteProv(e.target.value)} placeholder="Nombre del proveedor" className="w-full bg-[#050505] border border-neutral-800 rounded-xl p-3 text-sm text-white outline-none focus:ring-2 focus:ring-red-600 shadow-inner" />
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="text-xs font-bold uppercase tracking-wider text-neutral-400 mb-2 block">
-                    Costo USDT
-                  </label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    required
-                    value={loteCosto}
-                    onChange={(e) => setLoteCosto(e.target.value)}
-                    placeholder="0.00"
-                    className="w-full bg-[#050505] border border-neutral-800 rounded-xl p-3 text-sm text-white outline-none focus:ring-2 focus:ring-red-600 shadow-inner"
-                  />
+                  <label className="text-xs font-bold uppercase tracking-wider text-neutral-400 mb-2 block">Costo USDT</label>
+                  <input type="number" step="0.01" required value={loteCosto} onChange={(e) => setLoteCosto(e.target.value)} placeholder="0.00" className="w-full bg-[#050505] border border-neutral-800 rounded-xl p-3 text-sm text-white outline-none focus:ring-2 focus:ring-red-600 shadow-inner" />
                 </div>
                 <div>
-                  <label className="text-xs font-bold uppercase tracking-wider text-neutral-400 mb-2 block">
-                    Precio Soles
-                  </label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    required
-                    value={lotePrecio}
-                    onChange={(e) => setLotePrecio(e.target.value)}
-                    placeholder="0.00"
-                    className="w-full bg-[#050505] border border-neutral-800 rounded-xl p-3 text-sm text-white outline-none focus:ring-2 focus:ring-red-600 shadow-inner"
-                  />
+                  <label className="text-xs font-bold uppercase tracking-wider text-neutral-400 mb-2 block">Precio Soles</label>
+                  <input type="number" step="0.01" required value={lotePrecio} onChange={(e) => setLotePrecio(e.target.value)} placeholder="0.00" className="w-full bg-[#050505] border border-neutral-800 rounded-xl p-3 text-sm text-white outline-none focus:ring-2 focus:ring-red-600 shadow-inner" />
                 </div>
               </div>
+
               <div>
-                <label className="text-xs font-bold uppercase tracking-wider text-neutral-400 mb-2 block">
-                  Lista de Correos
-                </label>
-                <textarea
-                  rows="6"
-                  required
-                  value={loteCorreos}
-                  onChange={(e) => setLoteCorreos(e.target.value)}
-                  placeholder="Pega los correos aquí... (uno por línea)"
-                  className="w-full bg-[#050505] border border-neutral-800 rounded-xl p-3 text-sm text-white outline-none font-mono resize-none focus:ring-2 focus:ring-red-600 shadow-inner"
-                ></textarea>
+                <label className="text-xs font-bold uppercase tracking-wider text-neutral-400 mb-2 block flex items-center gap-2"><Upload className="w-4 h-4 text-red-500" /> Subir Archivo de Bloc de Notas (.txt) o Pegar Debajo</label>
+                <input type="file" accept=".txt" onChange={manejarSubidaArchivoTxt} className="w-full text-xs text-neutral-400 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-red-950/40 file:text-red-300 hover:file:bg-red-900/40 cursor-pointer border border-neutral-800 rounded-xl p-2 bg-[#050505]" />
+              </div>
+
+              <div>
+                <label className="text-xs font-bold uppercase tracking-wider text-neutral-400 mb-2 block">Lista de Correos (Se extraerán automáticamente)</label>
+                <textarea rows="5" required value={loteCorreos} onChange={(e) => setLoteCorreos(e.target.value)} placeholder="Pega o carga el texto aquí..." className="w-full bg-[#050505] border border-neutral-800 rounded-xl p-3 text-sm text-white outline-none font-mono resize-none focus:ring-2 focus:ring-red-600 shadow-inner"></textarea>
               </div>
               <div className="flex justify-end gap-3 pt-4 border-t border-[#2b0d0d]">
-                <button
-                  type="button"
-                  onClick={() => setModalInv(false)}
-                  className="px-5 py-2.5 text-neutral-400 hover:text-white text-sm font-bold"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  className="px-6 py-2.5 bg-gradient-to-r from-[#800f11] to-red-600 hover:from-red-700 hover:to-red-500 text-white rounded-xl text-sm font-bold shadow-lg shadow-red-950"
-                >
-                  Guardar Lote
-                </button>
+                <button type="button" onClick={() => setModalInv(false)} className="px-5 py-2.5 text-neutral-400 hover:text-white text-sm font-bold">Cancelar</button>
+                <button type="submit" className="px-6 py-2.5 bg-gradient-to-r from-[#800f11] to-red-600 hover:from-red-700 hover:to-red-500 text-white rounded-xl text-sm font-bold shadow-lg shadow-red-950">Guardar Lote</button>
               </div>
             </form>
           </div>
@@ -1463,116 +1014,47 @@ export default function App() {
         <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-50 flex justify-center items-center p-4">
           <div className="bg-[#0d0d0d] border border-[#3b0909] rounded-3xl w-full max-w-md p-8 space-y-5 shadow-2xl shadow-red-950">
             <div className="flex justify-between items-center border-b border-[#2b0d0d] pb-4">
-              <h3 className="text-xl font-extrabold text-white">
-                Asignar Cuenta a Cliente
-              </h3>
-              <button
-                onClick={() => setModalCli(false)}
-                className="text-neutral-400 hover:text-white"
-              >
-                <X className="w-6 h-6" />
-              </button>
+              <h3 className="text-xl font-extrabold text-white">Asignar Cuenta a Cliente</h3>
+              <button onClick={() => setModalCli(false)} className="text-neutral-400 hover:text-white"><X className="w-6 h-6" /></button>
             </div>
             <form onSubmit={guardarClienteNuevo} className="space-y-4">
               <div>
-                <label className="text-xs font-bold uppercase tracking-wider text-neutral-400 mb-1.5 block">
-                  Nombre del Cliente
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={cliNom}
-                  onChange={(e) => setCliNom(e.target.value)}
-                  placeholder="Nombre completo"
-                  className="w-full bg-[#050505] border border-neutral-800 rounded-xl p-3 text-sm text-white outline-none focus:ring-2 focus:ring-red-600 shadow-inner"
-                />
+                <label className="text-xs font-bold uppercase tracking-wider text-neutral-400 mb-1.5 block">Nombre del Cliente</label>
+                <input type="text" required value={cliNom} onChange={(e) => setCliNom(e.target.value)} placeholder="Nombre completo" className="w-full bg-[#050505] border border-neutral-800 rounded-xl p-3 text-sm text-white outline-none focus:ring-2 focus:ring-red-600 shadow-inner" />
               </div>
               <div>
-                <label className="text-xs font-bold uppercase tracking-wider text-neutral-400 mb-1.5 block">
-                  WhatsApp
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={cliNum}
-                  onChange={(e) => setCliNum(e.target.value)}
-                  placeholder="Ej. 987654321"
-                  className="w-full bg-[#050505] border border-neutral-800 rounded-xl p-3 text-sm text-white outline-none focus:ring-2 focus:ring-red-600 shadow-inner"
-                />
+                <label className="text-xs font-bold uppercase tracking-wider text-neutral-400 mb-1.5 block">WhatsApp</label>
+                <input type="text" required value={cliNum} onChange={(e) => setCliNum(e.target.value)} placeholder="Ej. 987654321" className="w-full bg-[#050505] border border-neutral-800 rounded-xl p-3 text-sm text-white outline-none focus:ring-2 focus:ring-red-600 shadow-inner" />
               </div>
               <div>
-                <label className="text-xs font-bold uppercase tracking-wider text-neutral-400 mb-1.5 block">
-                  Cuenta Disponible en Stock:
-                </label>
-                <select
-                  required
-                  value={cliCuentaAsignada}
-                  onChange={(e) => setCliCuentaAsignada(e.target.value)}
-                  className="w-full bg-[#050505] border border-neutral-800 rounded-xl p-3 text-sm text-white outline-none focus:ring-2 focus:ring-red-600 shadow-inner"
-                >
+                <label className="text-xs font-bold uppercase tracking-wider text-neutral-400 mb-1.5 block">Cuenta Disponible en Stock:</label>
+                <select required value={cliCuentaAsignada} onChange={(e) => setCliCuentaAsignada(e.target.value)} className="w-full bg-[#050505] border border-neutral-800 rounded-xl p-3 text-sm text-white outline-none focus:ring-2 focus:ring-red-600 shadow-inner">
                   <option value="">-- Selecciona una cuenta --</option>
-                  {inventario
-                    .filter((i) => i.estado === 'Disponible')
-                    .map((item) => (
-                      <option key={item.id} value={item.correo}>
-                        {item.correo} ({item.proveedor})
-                      </option>
-                    ))}
+                  {inventario.filter((i) => i.estado === 'Disponible').map((item) => (
+                    <option key={item.id} value={item.correo}>{item.correo} ({item.proveedor})</option>
+                  ))}
                 </select>
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="text-xs font-bold uppercase tracking-wider text-neutral-400 mb-1.5 block">
-                    Fecha Inicio
-                  </label>
-                  <input
-                    type="date"
-                    required
-                    value={cliInicio}
-                    onChange={(e) => setCliInicio(e.target.value)}
-                    className="w-full bg-[#050505] border border-neutral-800 rounded-xl p-2.5 text-sm text-white outline-none focus:ring-2 focus:ring-red-600 shadow-inner"
-                  />
+                  <label className="text-xs font-bold uppercase tracking-wider text-neutral-400 mb-1.5 block">Fecha Inicio</label>
+                  <input type="date" required value={cliInicio} onChange={(e) => setCliInicio(e.target.value)} className="w-full bg-[#050505] border border-neutral-800 rounded-xl p-2.5 text-sm text-white outline-none focus:ring-2 focus:ring-red-600 shadow-inner" />
                 </div>
                 <div>
-                  <label className="text-xs font-bold uppercase tracking-wider text-neutral-400 mb-1.5 block">
-                    Fecha Fin
-                  </label>
-                  <input
-                    type="date"
-                    required
-                    value={cliFin}
-                    onChange={(e) => setCliFin(e.target.value)}
-                    className="w-full bg-[#050505] border border-neutral-800 rounded-xl p-2.5 text-sm text-white outline-none focus:ring-2 focus:ring-red-600 shadow-inner"
-                  />
+                  <label className="text-xs font-bold uppercase tracking-wider text-neutral-400 mb-1.5 block">Fecha Fin</label>
+                  <input type="date" required value={cliFin} onChange={(e) => setCliFin(e.target.value)} className="w-full bg-[#050505] border border-neutral-800 rounded-xl p-2.5 text-sm text-white outline-none focus:ring-2 focus:ring-red-600 shadow-inner" />
                 </div>
               </div>
               <div>
-                <label className="text-xs font-bold uppercase tracking-wider text-neutral-400 mb-1.5 block">
-                  Estado de Pago
-                </label>
-                <select
-                  value={cliPago}
-                  onChange={(e) => setCliPago(e.target.value)}
-                  className="w-full bg-[#050505] border border-neutral-800 rounded-xl p-3 text-sm text-white outline-none font-bold focus:ring-2 focus:ring-red-600 shadow-inner"
-                >
+                <label className="text-xs font-bold uppercase tracking-wider text-neutral-400 mb-1.5 block">Estado de Pago</label>
+                <select value={cliPago} onChange={(e) => setCliPago(e.target.value)} className="w-full bg-[#050505] border border-neutral-800 rounded-xl p-3 text-sm text-white outline-none font-bold focus:ring-2 focus:ring-red-600 shadow-inner">
                   <option value="Pagado">✅ Pagado</option>
                   <option value="Pendiente">❌ Pendiente</option>
                 </select>
               </div>
               <div className="flex justify-end gap-3 pt-4 border-t border-[#2b0d0d]">
-                <button
-                  type="button"
-                  onClick={() => setModalCli(false)}
-                  className="px-5 py-2.5 text-neutral-400 hover:text-white text-sm font-bold"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  className="px-6 py-2.5 bg-gradient-to-r from-[#800f11] to-red-600 hover:from-red-700 hover:to-red-500 text-white rounded-xl text-sm font-bold shadow-lg shadow-red-950"
-                >
-                  Asignar con Éxito
-                </button>
+                <button type="button" onClick={() => setModalCli(false)} className="px-5 py-2.5 text-neutral-400 hover:text-white text-sm font-bold">Cancelar</button>
+                <button type="submit" className="px-6 py-2.5 bg-gradient-to-r from-[#800f11] to-red-600 hover:from-red-700 hover:to-red-500 text-white rounded-xl text-sm font-bold shadow-lg shadow-red-950">Asignar con Éxito</button>
               </div>
             </form>
           </div>
@@ -1583,26 +1065,13 @@ export default function App() {
         <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-50 flex justify-center items-center p-4">
           <div className="bg-[#0d0d0d] border border-[#3b0909] rounded-3xl w-full max-w-md p-8 space-y-5 shadow-2xl shadow-red-950">
             <div className="flex justify-between items-center border-b border-[#2b0d0d] pb-4">
-              <h3 className="text-xl font-extrabold text-white">
-                Control de Gastos
-              </h3>
-              <button
-                onClick={() => setModalCaja(false)}
-                className="text-neutral-400 hover:text-white"
-              >
-                <X className="w-6 h-6" />
-              </button>
+              <h3 className="text-xl font-extrabold text-white">Control de Gastos</h3>
+              <button onClick={() => setModalCaja(false)} className="text-neutral-400 hover:text-white"><X className="w-6 h-6" /></button>
             </div>
             <form onSubmit={guardarTransaccion} className="space-y-4">
               <div>
-                <label className="text-xs font-bold uppercase tracking-wider text-neutral-400 mb-1.5 block">
-                  Categoría del Gasto
-                </label>
-                <select
-                  value={gastoCategoria}
-                  onChange={(e) => setGastoCategoria(e.target.value)}
-                  className="w-full bg-[#050505] border border-neutral-800 rounded-xl p-3 text-sm text-white outline-none font-bold focus:ring-2 focus:ring-red-600 shadow-inner"
-                >
+                <label className="text-xs font-bold uppercase tracking-wider text-neutral-400 mb-1.5 block">Categoría del Gasto</label>
+                <select value={gastoCategoria} onChange={(e) => setGastoCategoria(e.target.value)} className="w-full bg-[#050505] border border-neutral-800 rounded-xl p-3 text-sm text-white outline-none font-bold focus:ring-2 focus:ring-red-600 shadow-inner">
                   <option value="Comida">🍔 Comida</option>
                   <option value="Pasajes">🚗 Pasajes</option>
                   <option value="Detalles">🎁 Detalles</option>
@@ -1610,59 +1079,23 @@ export default function App() {
                 </select>
               </div>
               <div>
-                <label className="text-xs font-bold uppercase tracking-wider text-neutral-400 mb-1.5 block">
-                  Concepto o Detalle
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={gastoConcepto}
-                  onChange={(e) => setGastoConcepto(e.target.value)}
-                  placeholder="Ej. Almuerzo con equipo"
-                  className="w-full bg-[#050505] border border-neutral-800 rounded-xl p-3 text-sm text-white outline-none focus:ring-2 focus:ring-red-600 shadow-inner"
-                />
+                <label className="text-xs font-bold uppercase tracking-wider text-neutral-400 mb-1.5 block">Concepto o Detalle</label>
+                <input type="text" required value={gastoConcepto} onChange={(e) => setGastoConcepto(e.target.value)} placeholder="Ej. Almuerzo con equipo" className="w-full bg-[#050505] border border-neutral-800 rounded-xl p-3 text-sm text-white outline-none focus:ring-2 focus:ring-red-600 shadow-inner" />
               </div>
               <div>
-                <label className="text-xs font-bold uppercase tracking-wider text-neutral-400 mb-1.5 block">
-                  Monto (Soles)
-                </label>
-                <input
-                  type="number"
-                  step="0.01"
-                  required
-                  value={gastoMonto}
-                  onChange={(e) => setGastoMonto(e.target.value)}
-                  placeholder="0.00"
-                  className="w-full bg-[#050505] border border-neutral-800 rounded-xl p-3 text-sm text-white outline-none focus:ring-2 focus:ring-red-600 shadow-inner"
-                />
+                <label className="text-xs font-bold uppercase tracking-wider text-neutral-400 mb-1.5 block">Monto (Soles)</label>
+                <input type="number" step="0.01" required value={gastoMonto} onChange={(e) => setGastoMonto(e.target.value)} placeholder="0.00" className="w-full bg-[#050505] border border-neutral-800 rounded-xl p-3 text-sm text-white outline-none focus:ring-2 focus:ring-red-600 shadow-inner" />
               </div>
               <div>
-                <label className="text-xs font-bold uppercase tracking-wider text-neutral-400 mb-1.5 block">
-                  Tipo de Transacción
-                </label>
-                <select
-                  value={gastoTipo}
-                  onChange={(e) => setGastoTipo(e.target.value)}
-                  className="w-full bg-[#050505] border border-neutral-800 rounded-xl p-3 text-sm text-white outline-none font-bold focus:ring-2 focus:ring-red-600 shadow-inner"
-                >
+                <label className="text-xs font-bold uppercase tracking-wider text-neutral-400 mb-1.5 block">Tipo de Transacción</label>
+                <select value={gastoTipo} onChange={(e) => setGastoTipo(e.target.value)} className="w-full bg-[#050505] border border-neutral-800 rounded-xl p-3 text-sm text-white outline-none font-bold focus:ring-2 focus:ring-red-600 shadow-inner">
                   <option value="Egreso">🔻 Egreso (Gasto)</option>
                   <option value="Ingreso">🔺 Ingreso Extra</option>
                 </select>
               </div>
               <div className="flex justify-end gap-3 pt-4 border-t border-[#2b0d0d]">
-                <button
-                  type="button"
-                  onClick={() => setModalCaja(false)}
-                  className="px-5 py-2.5 text-neutral-400 hover:text-white text-sm font-bold"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  className="px-6 py-2.5 bg-gradient-to-r from-[#800f11] to-red-600 hover:from-red-700 hover:to-red-500 text-white rounded-xl text-sm font-bold shadow-lg shadow-red-950"
-                >
-                  Registrar
-                </button>
+                <button type="button" onClick={() => setModalCaja(false)} className="px-5 py-2.5 text-neutral-400 hover:text-white text-sm font-bold">Cancelar</button>
+                <button type="submit" className="px-6 py-2.5 bg-gradient-to-r from-[#800f11] to-red-600 hover:from-red-700 hover:to-red-500 text-white rounded-xl text-sm font-bold shadow-lg shadow-red-950">Registrar</button>
               </div>
             </form>
           </div>
@@ -1675,14 +1108,7 @@ export default function App() {
 function BotonesMenu({ icono, texto, vista, vistaActual, setVista }) {
   const activo = vistaActual === vista;
   return (
-    <button
-      onClick={() => setVista(vista)}
-      className={`w-full flex items-center gap-3.5 px-4 py-3 rounded-2xl transition-all duration-200 ${
-        activo
-          ? 'bg-gradient-to-r from-[#800f11] to-red-600 text-white shadow-lg shadow-red-950 font-bold'
-          : 'text-neutral-400 hover:bg-neutral-900 hover:text-neutral-200 font-medium'
-      }`}
-    >
+    <button onClick={() => setVista(vista)} className={`w-full flex items-center gap-3.5 px-4 py-3 rounded-2xl transition-all duration-200 ${activo ? 'bg-gradient-to-r from-[#800f11] to-red-600 text-white shadow-lg shadow-red-950 font-bold' : 'text-neutral-400 hover:bg-neutral-900 hover:text-neutral-200 font-medium'}`}>
       {icono}
       <span className="text-sm tracking-wide">{texto}</span>
     </button>
@@ -1692,14 +1118,7 @@ function BotonesMenu({ icono, texto, vista, vistaActual, setVista }) {
 function BotonMobile({ icono, texto, vista, vistaActual, setVista }) {
   const activo = vistaActual === vista;
   return (
-    <button
-      onClick={() => setVista(vista)}
-      className={`flex flex-col items-center justify-center py-1.5 px-2 rounded-xl transition-all ${
-        activo
-          ? 'text-red-500 font-bold scale-105'
-          : 'text-neutral-400 hover:text-neutral-200 font-medium'
-      }`}
-    >
+    <button onClick={() => setVista(vista)} className={`flex flex-col items-center justify-center py-1.5 px-2 rounded-xl transition-all ${activo ? 'text-red-500 font-bold scale-105' : 'text-neutral-400 hover:text-neutral-200 font-medium'}`}>
       {icono}
       <span className="text-[10px] tracking-tight mt-1">{texto}</span>
     </button>
