@@ -169,6 +169,66 @@ export default function App() {
 
   const [copiadoIdx, setCopiadoIdx] = useState(null);
 
+  // --- OBTENER CLIENTES ÚNICOS PARA EL SELECTOR ---
+  const clientesUnicos = [];
+  const mapClientes = new Map();
+  clientes.forEach(c => {
+    if (!mapClientes.has(c.whatsapp)) {
+      mapClientes.set(c.whatsapp, true);
+      clientesUnicos.push({ nombre: c.nombre, whatsapp: c.whatsapp });
+    }
+  });
+  clientesUnicos.sort((a, b) => a.nombre.localeCompare(b.nombre));
+
+  // --- AGRUPAR CUENTAS PARA COBROS MASIVOS ---
+  function agruparPorWhatsapp(lista) {
+    const map = {};
+    lista.forEach(c => {
+      if (!map[c.whatsapp]) map[c.whatsapp] = { nombre: c.nombre, whatsapp: c.whatsapp, cuentas: [] };
+      map[c.whatsapp].cuentas.push(c);
+    });
+    return Object.values(map);
+  }
+
+  const generarLinkWp = (grupo) => {
+    const correosStr = grupo.cuentas.map(c => c.cuenta.split(' (')[0].trim()).join(', ');
+    const montoTotal = grupo.cuentas.length * 35;
+    const texto = `Hola ${grupo.nombre}, tienes un pago pendiente de: ${correosStr}. El total de la renovación es S/ ${montoTotal} al Yape 931111443 a nombre de Ruben Ich.`;
+    return `https://wa.me/${grupo.whatsapp}?text=${encodeURIComponent(texto)}`;
+  };
+
+  async function renovarCobranzaGrupo(cuentas) {
+    try {
+      const idsActualizados = [];
+      for (let c of cuentas) {
+        const arr = c.fin ? c.fin.split('-') : [];
+        let d = arr.length === 3 ? new Date(arr[0], arr[1] - 1, arr[2]) : new Date();
+        d.setDate(d.getDate() + 30);
+        const nuevaFecha = d.toISOString().split('T')[0];
+        idsActualizados.push({ id: c.id, fin: nuevaFecha, pago: 'Pagado' });
+        
+        // Actualizamos uno por uno (o podríamos hacer un bulk update)
+        await supabase.from('clientes').update({ fin: nuevaFecha, pago: 'Pagado' }).eq('id', c.id);
+      }
+      mostrarNotificacion(`Cuentas renovadas exitosamente`, 'success');
+      cargarDatos();
+    } catch (error) {
+      mostrarNotificacion('Error al renovar: ' + error.message, 'error');
+    }
+  }
+
+  async function marcarComoPagadoGrupo(cuentas) {
+    try {
+      const ids = cuentas.map(c => c.id);
+      const { error } = await supabase.from('clientes').update({ pago: 'Pagado' }).in('id', ids);
+      if (error) throw error;
+      mostrarNotificacion(`¡Deuda saldada! (${cuentas.length} cuentas pagadas)`, 'success');
+      cargarDatos();
+    } catch (error) {
+      mostrarNotificacion('Error al actualizar pago: ' + error.message, 'error');
+    }
+  }
+
   // --- LIMPIEZA DE DUPLICADOS ---
   async function limpiarDuplicados() {
     if (!confirm('¿Estás seguro de limpiar los correos duplicados? El sistema conservará uno de cada correo y borrará los repetidos.')) return;
@@ -205,10 +265,7 @@ export default function App() {
 
       for (let i = 0; i < idsAEliminar.length; i += 100) {
         const batch = idsAEliminar.slice(i, i + 100);
-        const { error: deleteError } = await supabase
-          .from('inventario')
-          .delete()
-          .in('id', batch);
+        const { error: deleteError } = await supabase.from('inventario').delete().in('id', batch);
         if (deleteError) throw deleteError;
       }
 
@@ -216,40 +273,8 @@ export default function App() {
       cargarDatos();
     } catch (err) {
       mostrarNotificacion('Error al limpiar duplicados: ' + err.message, 'error');
-      console.error(err);
     } finally {
       setCargando(false);
-    }
-  }
-
-  async function renovarCobranza(cliente) {
-    try {
-      const arr = cliente.fin ? cliente.fin.split('-') : [];
-      let d =
-        arr.length === 3 ? new Date(arr[0], arr[1] - 1, arr[2]) : new Date();
-      d.setDate(d.getDate() + 30);
-      const nuevaFecha = d.toISOString().split('T')[0];
-
-      const { error } = await supabase
-        .from('clientes')
-        .update({ fin: nuevaFecha, pago: 'Pagado' })
-        .eq('id', cliente.id);
-      if (error) throw error;
-      mostrarNotificacion(`Cuenta de ${cliente.nombre} renovada`, 'success');
-      cargarDatos();
-    } catch (error) {
-      mostrarNotificacion('Error al renovar: ' + error.message, 'error');
-    }
-  }
-
-  async function marcarComoPagado(id) {
-    try {
-      const { error } = await supabase.from('clientes').update({ pago: 'Pagado' }).eq('id', id);
-      if (error) throw error;
-      mostrarNotificacion('Deuda saldada correctamente', 'success');
-      cargarDatos();
-    } catch (error) {
-      mostrarNotificacion('Error al actualizar pago: ' + error.message, 'error');
     }
   }
 
@@ -288,15 +313,10 @@ export default function App() {
 
       const correosUnicos = [...new Set(correosEncontrados.map(c => c.toLowerCase().trim()))];
 
-      const { data: correosBD, error: errConsulta } = await supabase
-        .from('inventario')
-        .select('correo');
-        
+      const { data: correosBD, error: errConsulta } = await supabase.from('inventario').select('correo');
       if (errConsulta) throw errConsulta;
 
-      const setExistentes = new Set(
-        (correosBD || []).map((i) => (i.correo || '').toLowerCase().trim())
-      );
+      const setExistentes = new Set((correosBD || []).map((i) => (i.correo || '').toLowerCase().trim()));
       
       let nuevas = [];
       let dup = 0;
@@ -332,7 +352,6 @@ export default function App() {
       cargarDatos();
     } catch (error) {
       mostrarNotificacion('Error al guardar el lote: ' + error.message, 'error');
-      console.error(error);
     }
   }
 
@@ -340,7 +359,6 @@ export default function App() {
   async function guardarClienteNuevo(e) {
     e.preventDefault();
 
-    // 1. Extraemos los correos de lo que pegaste
     const regexCorreos = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
     const correosPega = cliCuentaAsignada.match(regexCorreos) || [];
 
@@ -349,12 +367,10 @@ export default function App() {
       return;
     }
 
-    // 2. Filtramos duplicados en tu texto
     const correosUnicos = [...new Set(correosPega.map(c => c.toLowerCase().trim()))];
     const itemsAAsignar = [];
     const correosNoDisponibles = [];
 
-    // 3. Verificamos si existen en tu inventario libre
     for (const correo of correosUnicos) {
       const itemLibre = inventario.find(i => (i.correo || '').toLowerCase() === correo && i.estado === 'Disponible');
       if (itemLibre) {
@@ -370,7 +386,6 @@ export default function App() {
     }
 
     try {
-      // 4. Actualizamos el estado a "Asignada" en el Inventario para TODAS de golpe
       const idsToUpdate = itemsAAsignar.map(i => i.id);
       const { error: invError } = await supabase
         .from('inventario')
@@ -379,7 +394,6 @@ export default function App() {
         
       if (invError) throw invError;
 
-      // 5. Creamos un registro de cliente por cada cuenta vendida
       const nuevosClientes = itemsAAsignar.map(itemLibre => ({
         whatsapp: cliNum,
         nombre: cliNom,
@@ -500,13 +514,12 @@ export default function App() {
   const libres = inventario.filter((i) => i.estado === 'Disponible').length;
   const numTc = parseFloat(tc) || 3.42;
 
-  // --- CÁLCULOS FINANCIEROS CORREGIDOS ---
+  // --- CÁLCULOS FINANCIEROS ---
   let egresosUsdt = 0;
   inventario.forEach((item) => {
     egresosUsdt += parseFloat(item.costo) || 0;
   });
 
-  // Solo suma Ingresos por Ventas si el cliente realmente ha pagado
   let ingresosSoles = 0;
   clientes.forEach((cli) => {
     if (cli.pago === 'Pagado') {
@@ -518,7 +531,6 @@ export default function App() {
     }
   });
 
-  // Separa correctamente Ingresos Extras de los Egresos
   let cajaIngresos = 0;
   let cajaEgresos = 0;
   pagos.forEach((p) => {
@@ -531,14 +543,27 @@ export default function App() {
   const gananciaNeta = ingresosTotalesSoles - egresosTotalesSoles;
 
   const hoyStr = new Date().toISOString().split('T')[0];
-  const cuentasQueVencenHoy = clientes.filter((c) => c.fin === hoyStr);
+
+  // AGRUPACIONES PARA EL DASHBOARD
+  const cuentasQueVencenHoyAgrupadas = agruparPorWhatsapp(clientes.filter((c) => c.fin === hoyStr));
+  const deudasPendientesAgrupadas = agruparPorWhatsapp(clientes.filter((c) => c.pago === 'Pendiente'));
+  
+  const proximosVencimientosAgrupados = agruparPorWhatsapp(clientes.filter((cli) => {
+    const hoy = new Date();
+    const lim = new Date();
+    lim.setDate(hoy.getDate() + 3);
+    const arr = cli.fin ? cli.fin.split('-') : [];
+    if (arr.length !== 3) return false;
+    const d = new Date(arr[0], arr[1] - 1, arr[2]);
+    return d > hoy && d <= lim;
+  }));
+
   const inventarioGestion = inventario.filter(
     (i) =>
       i.correo.toLowerCase().includes(busquedaGestion.toLowerCase()) ||
       i.proveedor.toLowerCase().includes(busquedaGestion.toLowerCase())
   );
 
-  // Las tarjetas de gastos ya NO restarán ni mezclarán tus "Ingresos Extras"
   const gastosComida = pagos
     .filter((p) => p.tipo === 'Egreso' && p.concepto && p.concepto.includes('[Comida]'))
     .reduce((a, b) => a + parseFloat(b.monto || 0), 0);
@@ -684,19 +709,19 @@ export default function App() {
                     <h3 className="text-lg font-extrabold text-white flex items-center gap-2.5">
                       <AlertCircle className="w-6 h-6 text-red-500" /> Cobranza - Vencen Hoy ({hoyStr})
                     </h3>
-                    {cuentasQueVencenHoy.length === 0 ? (
+                    {cuentasQueVencenHoyAgrupadas.length === 0 ? (
                       <p className="text-neutral-400 text-sm font-medium">No hay cuentas que expiren exactamente hoy.</p>
                     ) : (
                       <div className="space-y-3">
-                        {cuentasQueVencenHoy.map((cli) => (
-                          <div key={cli.id} className="flex flex-wrap justify-between items-center bg-[#0a0a0a] p-5 rounded-2xl border border-[#2b0d0d] gap-4 shadow-md">
+                        {cuentasQueVencenHoyAgrupadas.map((grupo) => (
+                          <div key={grupo.whatsapp} className="flex flex-wrap justify-between items-center bg-[#0a0a0a] p-5 rounded-2xl border border-[#2b0d0d] gap-4 shadow-md">
                             <div>
-                              <p className="font-bold text-white text-base">{cli.nombre} <span className="text-xs text-neutral-400 font-normal">({cli.whatsapp})</span></p>
-                              <p className="text-xs text-red-400 font-mono mt-0.5">{cli.cuenta}</p>
+                              <p className="font-bold text-white text-base">{grupo.nombre} <span className="text-xs text-neutral-400 font-normal">({grupo.whatsapp})</span></p>
+                              <p className="text-xs text-red-400 font-mono mt-0.5">{grupo.cuentas.length} cuentas vencen hoy (Renovación: S/ {grupo.cuentas.length * 35})</p>
                             </div>
                             <div className="flex items-center gap-3">
-                              <a href={`https://wa.me/${cli.whatsapp}?text=Hola%20${cli.nombre},%20tu%20cuenta%20vence%20hoy.%20¿Deseas%20renovar%20por%2030%20días%20más?`} target="_blank" rel="noreferrer" className="bg-[#1f0a0a] hover:bg-[#331111] text-red-300 border border-red-900/40 px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-sm">Cobrar Wp</a>
-                              <button onClick={() => renovarCobranza(cli)} className="bg-gradient-to-r from-[#800f11] to-red-600 hover:from-red-700 hover:to-red-500 text-white px-5 py-2 rounded-xl text-xs font-bold transition shadow-md shadow-red-950 flex items-center gap-1.5"><RefreshCw className="w-3.5 h-3.5" /> Renovar 30 días</button>
+                              <a href={generarLinkWp(grupo)} target="_blank" rel="noreferrer" className="bg-[#1f0a0a] hover:bg-[#331111] text-red-300 border border-red-900/40 px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-sm">Cobrar Wp</a>
+                              <button onClick={() => renovarCobranzaGrupo(grupo.cuentas)} className="bg-gradient-to-r from-[#800f11] to-red-600 hover:from-red-700 hover:to-red-500 text-white px-5 py-2 rounded-xl text-xs font-bold transition shadow-md shadow-red-950 flex items-center gap-1.5"><RefreshCw className="w-3.5 h-3.5" /> Renovar Todo</button>
                             </div>
                           </div>
                         ))}
@@ -708,15 +733,18 @@ export default function App() {
                     <div className="p-7 rounded-3xl border border-[#2b0d0d] bg-[#0d0d0d] space-y-4 shadow-xl">
                       <h3 className="text-base font-extrabold text-red-500 flex items-center gap-2"><Wallet className="w-5 h-5" /> Deudas Pendientes</h3>
                       <div className="space-y-2">
-                        {clientes.filter((c) => c.pago === 'Pendiente').length === 0 ? (
+                        {deudasPendientesAgrupadas.length === 0 ? (
                           <p className="text-neutral-400 text-sm font-medium">Todos al día 🎉</p>
                         ) : (
-                          clientes.filter((c) => c.pago === 'Pendiente').map((cli) => (
-                            <div key={cli.id} className="flex justify-between items-center py-3 border-b border-neutral-900 text-sm">
-                              <span className="font-bold text-gray-200">{cli.nombre}</span>
-                              <div className="flex items-center gap-2">
-                                <button onClick={() => marcarComoPagado(cli.id)} className="text-green-400 bg-green-950/40 border border-green-900/50 px-3.5 py-1.5 rounded-xl text-xs font-bold hover:bg-green-900/40 transition">✓ Pagó</button>
-                                <a href={`https://wa.me/${cli.whatsapp}?text=Hola,%20tienes%20un%20pago%20pendiente.`} target="_blank" rel="noreferrer" className="text-red-400 bg-red-950/40 border border-red-900/50 px-3.5 py-1.5 rounded-xl text-xs font-bold hover:bg-red-900/40 transition">Cobrar Wp</a>
+                          deudasPendientesAgrupadas.map((grupo) => (
+                            <div key={grupo.whatsapp} className="flex justify-between items-center py-4 border-b border-neutral-900 text-sm">
+                              <div>
+                                <span className="font-bold text-gray-200 block">{grupo.nombre}</span>
+                                <span className="text-xs text-red-400 font-bold">{grupo.cuentas.length} cuentas (Deuda: S/ {grupo.cuentas.length * 35})</span>
+                              </div>
+                              <div className="flex flex-col sm:flex-row items-end sm:items-center gap-2">
+                                <button onClick={() => marcarComoPagadoGrupo(grupo.cuentas)} className="text-green-400 bg-green-950/40 border border-green-900/50 px-3.5 py-1.5 rounded-xl text-xs font-bold hover:bg-green-900/40 transition">✓ Pagó</button>
+                                <a href={generarLinkWp(grupo)} target="_blank" rel="noreferrer" className="text-red-400 bg-red-950/40 border border-red-900/50 px-3.5 py-1.5 rounded-xl text-xs font-bold hover:bg-red-900/40 transition">Cobrar Wp</a>
                               </div>
                             </div>
                           ))
@@ -727,25 +755,22 @@ export default function App() {
                     <div className="p-7 rounded-3xl border border-[#2b0d0d] bg-[#0d0d0d] space-y-4 shadow-xl">
                       <h3 className="text-base font-extrabold text-amber-500 flex items-center gap-2"><Clock className="w-5 h-5" /> Vencen próximos 3 días</h3>
                       <div className="space-y-2">
-                        {(() => {
-                          const hoy = new Date();
-                          const lim = new Date();
-                          lim.setDate(hoy.getDate() + 3);
-                          const porVencer = clientes.filter((cli) => {
-                            const arr = cli.fin ? cli.fin.split('-') : [];
-                            if (arr.length !== 3) return false;
-                            const d = new Date(arr[0], arr[1] - 1, arr[2]);
-                            return d >= hoy && d <= lim;
-                          });
-
-                          if (porVencer.length === 0) return <p className="text-neutral-400 text-sm font-medium">Sin vencimientos cercanos.</p>;
-                          return porVencer.map((cli) => (
-                            <div key={cli.id} className="flex justify-between py-3 border-b border-neutral-900 text-sm">
-                              <span className="font-bold text-gray-200">{cli.nombre}</span>
-                              <span className="text-amber-400 font-extrabold text-xs bg-amber-500/10 px-2.5 py-1 rounded-lg border border-amber-500/20">{cli.fin}</span>
+                        {proximosVencimientosAgrupados.length === 0 ? (
+                          <p className="text-neutral-400 text-sm font-medium">Sin vencimientos cercanos.</p>
+                        ) : (
+                          proximosVencimientosAgrupados.map((grupo) => (
+                            <div key={grupo.whatsapp} className="flex justify-between items-center py-4 border-b border-neutral-900 text-sm">
+                              <div>
+                                <span className="font-bold text-gray-200 block">{grupo.nombre}</span>
+                                <span className="text-xs text-neutral-400 font-medium">{grupo.cuentas.length} cuentas por vencer</span>
+                              </div>
+                              <div className="flex flex-col sm:flex-row items-end sm:items-center gap-2">
+                                <span className="text-amber-400 font-extrabold text-xs bg-amber-500/10 px-2.5 py-1 rounded-lg border border-amber-500/20">{grupo.cuentas[0].fin}</span>
+                                <a href={generarLinkWp(grupo)} target="_blank" rel="noreferrer" className="text-red-400 bg-red-950/40 border border-red-900/50 px-3.5 py-1.5 rounded-xl text-xs font-bold hover:bg-red-900/40 transition">Avisar Wp</a>
+                              </div>
                             </div>
-                          ));
-                        })()}
+                          ))
+                        )}
                       </div>
                     </div>
                   </div>
@@ -853,7 +878,7 @@ export default function App() {
                     <div className="flex flex-wrap items-center gap-3 w-full md:w-auto justify-end">
                       <button onClick={() => exportarACSV(clientes, 'clientes_aluria')} className="bg-[#141414] hover:bg-neutral-800 text-neutral-200 px-4 py-2.5 rounded-xl text-sm font-semibold transition border border-neutral-800 flex items-center gap-2 shadow-sm"><Download className="w-4 h-4" /> Exportar CSV</button>
                       <button onClick={() => setModoResumen(!modoResumen)} className={`px-4 py-2.5 rounded-xl text-sm font-bold transition flex items-center gap-2 ${modoResumen ? 'bg-red-900 text-white border border-red-700' : 'bg-neutral-900 text-neutral-300 border border-neutral-800 hover:bg-neutral-800'}`}><TrendingUp className="w-4 h-4" /> {modoResumen ? 'Ver Directorio Normal' : 'Ver Resumen LTV'}</button>
-                      <button onClick={() => setModalCli(true)} className="bg-gradient-to-r from-[#800f11] to-red-600 hover:from-red-700 hover:to-red-500 text-white px-5 py-2.5 rounded-xl text-sm font-bold transition shadow-md shadow-red-950 flex items-center gap-2"><Plus className="w-4 h-4" /> Asignar / Nuevo</button>
+                      <button onClick={() => { setCliNom(''); setCliNum(''); setCliCuentaAsignada(''); setModalCli(true); }} className="bg-gradient-to-r from-[#800f11] to-red-600 hover:from-red-700 hover:to-red-500 text-white px-5 py-2.5 rounded-xl text-sm font-bold transition shadow-md shadow-red-950 flex items-center gap-2"><Plus className="w-4 h-4" /> Asignar / Nuevo</button>
                     </div>
                   </div>
 
@@ -1052,7 +1077,7 @@ export default function App() {
         </div>
       )}
 
-      {/* MODAL ASIGNAR CLIENTE MÚLTIPLE */}
+      {/* MODAL ASIGNAR CLIENTE MÚLTIPLE INTELIGENTE */}
       {modalCli && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-50 flex justify-center items-center p-4">
           <div className="bg-[#0d0d0d] border border-[#3b0909] rounded-3xl w-full max-w-md p-8 space-y-5 shadow-2xl shadow-red-950">
@@ -1060,6 +1085,32 @@ export default function App() {
               <h3 className="text-xl font-extrabold text-white">Asignar Cliente</h3>
               <button onClick={() => setModalCli(false)} className="text-neutral-400 hover:text-white"><X className="w-6 h-6" /></button>
             </div>
+            
+            {/* NUEVO SELECTOR DE CLIENTES EXISTENTES */}
+            <div className="bg-[#140a0a] p-4 rounded-xl border border-red-900/30 mb-2">
+              <label className="text-xs font-bold uppercase tracking-wider text-red-400 mb-1.5 block">¿Es un cliente registrado?</label>
+              <select 
+                className="w-full bg-[#050505] border border-red-900/50 rounded-xl p-2.5 text-sm text-white outline-none focus:ring-2 focus:ring-red-600"
+                onChange={(e) => {
+                  if(e.target.value === "") {
+                    setCliNom('');
+                    setCliNum('');
+                    return;
+                  }
+                  const seleccionado = clientesUnicos.find(c => c.whatsapp === e.target.value);
+                  if(seleccionado) {
+                    setCliNom(seleccionado.nombre);
+                    setCliNum(seleccionado.whatsapp);
+                  }
+                }}
+              >
+                <option value="">-- Crear Nuevo Cliente (Escribir datos abajo) --</option>
+                {clientesUnicos.map((c, idx) => (
+                  <option key={idx} value={c.whatsapp}>{c.nombre} ({c.whatsapp})</option>
+                ))}
+              </select>
+            </div>
+
             <form onSubmit={guardarClienteNuevo} className="space-y-4">
               <div>
                 <label className="text-xs font-bold uppercase tracking-wider text-neutral-400 mb-1.5 block">Nombre del Cliente</label>
@@ -1070,16 +1121,18 @@ export default function App() {
                 <input type="text" required value={cliNum} onChange={(e) => setCliNum(e.target.value)} placeholder="Ej. 987654321" className="w-full bg-[#050505] border border-neutral-800 rounded-xl p-3 text-sm text-white outline-none focus:ring-2 focus:ring-red-600 shadow-inner" />
               </div>
               
-              {/* NUEVO CAMPO INTELIGENTE DE TEXTO */}
               <div>
-                <label className="text-xs font-bold uppercase tracking-wider text-neutral-400 mb-1.5 block">Cuentas a Asignar (Pega texto o correos)</label>
+                <label className="text-xs font-bold uppercase tracking-wider text-neutral-400 mb-1.5 block flex items-center justify-between">
+                  Cuentas a Asignar
+                  <span className="text-[10px] text-neutral-500 font-normal normal-case">Pega varios correos a la vez</span>
+                </label>
                 <textarea 
                   required 
                   rows="3"
                   value={cliCuentaAsignada} 
                   onChange={(e) => setCliCuentaAsignada(e.target.value)} 
-                  placeholder="Pega aquí los correos o los bloques que copiaste de Ventas Rápidas..."
-                  className="w-full bg-[#050505] border border-neutral-800 rounded-xl p-3 text-sm text-white outline-none focus:ring-2 focus:ring-red-600 shadow-inner resize-none"
+                  placeholder="Pega aquí todo el texto que copiaste de Ventas Rápidas..."
+                  className="w-full bg-[#050505] border border-neutral-800 rounded-xl p-3 text-sm text-white outline-none focus:ring-2 focus:ring-red-600 shadow-inner resize-none font-mono"
                 ></textarea>
               </div>
 
@@ -1102,7 +1155,7 @@ export default function App() {
               </div>
               <div className="flex justify-end gap-3 pt-4 border-t border-[#2b0d0d]">
                 <button type="button" onClick={() => setModalCli(false)} className="px-5 py-2.5 text-neutral-400 hover:text-white text-sm font-bold">Cancelar</button>
-                <button type="submit" className="px-6 py-2.5 bg-gradient-to-r from-[#800f11] to-red-600 hover:from-red-700 hover:to-red-500 text-white rounded-xl text-sm font-bold shadow-lg shadow-red-950">Asignar con Éxito</button>
+                <button type="submit" className="px-6 py-2.5 bg-gradient-to-r from-[#800f11] to-red-600 hover:from-red-700 hover:to-red-500 text-white rounded-xl text-sm font-bold shadow-lg shadow-red-950">Guardar Asignaciones</button>
               </div>
             </form>
           </div>
