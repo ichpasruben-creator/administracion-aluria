@@ -471,9 +471,10 @@ export default function App() {
   );
 
   return (
-    <div className="flex h-screen overflow-hidden bg-[#050505] text-neutral-100 font-sans">
-      {/* MENÚ LATERAL (Estilo Rojo/Negro/Borgoña) */}
-      <aside className="w-72 border-r border-[#260505] bg-[#0a0a0a] flex flex-col justify-between shadow-2xl z-20">
+    <div className="flex h-screen overflow-hidden bg-[#050505] text-neutral-100 font-sans relative">
+      
+      {/* 💻 MENÚ LATERAL (Solo visible en Computadoras / Tablets grandes: md:flex) */}
+      <aside className="hidden md:flex w-72 border-r border-[#260505] bg-[#0a0a0a] flex-col justify-between shadow-2xl z-20">
         <div>
           <div className="p-6 border-b border-[#260505] flex items-center gap-3 bg-gradient-to-r from-[#140202] to-transparent">
             <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-[#800f11] to-red-600 flex items-center justify-center text-white shadow-lg shadow-red-950">
@@ -543,35 +544,55 @@ export default function App() {
         </div>
       </aside>
 
-      {/* CONTENIDO PRINCIPAL */}
-      <main className="flex-1 flex flex-col h-screen overflow-y-auto bg-transparent relative">
-        <header className="sticky top-0 z-10 px-8 py-5 flex justify-between items-center border-b border-[#260505] bg-[#0a0a0a]/90 backdrop-blur-2xl shadow-sm">
-          <h1 className="text-xl font-bold tracking-tight text-white capitalize flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-red-600"></span>
-            {vista === 'clientes'
-              ? 'Clientes'
-              : vista === 'ventas'
-              ? 'Ventas Rápidas'
-              : vista === 'inventario'
-              ? 'Inventario'
-              : vista === 'gestion'
-              ? 'Gestión de Cuentas Proveedores'
-              : vista === 'gastos'
-              ? 'Control de Gastos'
-              : 'Dashboard Financiero'}
-          </h1>
-          <div className="bg-[#141414] border border-[#3b0909] px-5 py-2 rounded-2xl flex items-center gap-3 shadow-lg shadow-red-950/20">
+      {/* 📱 BARRA DE NAVEGACIÓN INFERIOR (Solo visible en Celulares: md:hidden) */}
+      <nav className="md:hidden fixed bottom-0 inset-x-0 bg-[#0a0a0a] border-t border-[#260505] flex justify-around items-center py-2 px-1 z-40 shadow-2xl">
+        <BotonMobile icono={<LayoutDashboard className="w-5 h-5" />} texto="Dash" vista="dashboard" vistaActual={vista} setVista={setVista} />
+        <BotonMobile icono={<Zap className="w-5 h-5 text-red-500" />} texto="Ventas" vista="ventas" vistaActual={vista} setVista={setVista} />
+        <BotonMobile icono={<Package className="w-5 h-5" />} texto="Stock" vista="inventario" vistaActual={vista} setVista={setVista} />
+        <BotonMobile icono={<Users className="w-5 h-5" />} texto="Clientes" vista="clientes" vistaActual={vista} setVista={setVista} />
+        <BotonMobile icono={<DollarSign className="w-5 h-5 text-red-400" />} texto="Cuentas" vista="gestion" vistaActual={vista} setVista={setVista} />
+        <BotonMobile icono={<PieChart className="w-5 h-5 text-amber-500" />} texto="Gastos" vista="gastos" vistaActual={vista} setVista={setVista} />
+      </nav>
+
+      {/* CONTENIDO PRINCIPAL (Ocupa 100% de la pantalla operativa en el celular) */}
+      <main className="flex-1 flex flex-col h-screen overflow-y-auto bg-transparent relative pb-20 md:pb-0">
+        <header className="sticky top-0 z-10 px-6 py-4 flex justify-between items-center border-b border-[#260505] bg-[#0a0a0a]/90 backdrop-blur-2xl shadow-sm">
+          <div className="flex items-center gap-3">
+            {/* Botón de cerrar sesión rápido arriba a la izquierda solo en móvil */}
+            <button 
+              onClick={handleLogout}
+              className="md:hidden p-2 rounded-xl bg-red-950/50 text-red-400 border border-red-900/40"
+              title="Cerrar Sesión"
+            >
+              <LogOut className="w-4 h-4" />
+            </button>
+            <h1 className="text-lg md:text-xl font-bold tracking-tight text-white capitalize flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-red-600"></span>
+              {vista === 'clientes'
+                ? 'Clientes'
+                : vista === 'ventas'
+                ? 'Ventas Rápidas'
+                : vista === 'inventario'
+                ? 'Inventario'
+                : vista === 'gestion'
+                ? 'Gestión de Cuentas'
+                : vista === 'gastos'
+                ? 'Control de Gastos'
+                : 'Dashboard'}
+            </h1>
+          </div>
+          <div className="bg-[#141414] border border-[#3b0909] px-4 py-1.5 rounded-2xl flex items-center gap-2.5 shadow-lg shadow-red-950/20">
             <div className="w-2.5 h-2.5 rounded-full bg-red-600 animate-ping"></div>
             <span className="text-xs font-bold uppercase tracking-wider text-neutral-400">
-              Stock Libre:
+              Libre:
             </span>
-            <span className="text-lg font-extrabold text-white">
+            <span className="text-base font-extrabold text-white">
               {cargando ? '...' : libres}
             </span>
           </div>
         </header>
 
-        <div className="p-8 space-y-8">
+        <div className="p-4 md:p-8 space-y-8">
           {cargando ? (
             <div className="flex justify-center items-center h-64">
               <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-red-600"></div>
@@ -853,8 +874,8 @@ export default function App() {
               {/* VISTA INVENTARIO */}
               {vista === 'inventario' && (
                 <div className="rounded-3xl overflow-hidden animate-fade-in border border-[#2b0d0d] bg-[#0d0d0d] shadow-2xl">
-                  <div className="p-5 border-b border-[#2b0d0d] flex justify-between items-center bg-[#140a0a]">
-                    <div className="relative w-1/3">
+                  <div className="p-5 border-b border-[#2b0d0d] flex flex-col md:flex-row justify-between items-center bg-[#140a0a] gap-4">
+                    <div className="relative w-full md:w-1/3">
                       <Search className="absolute left-3.5 top-3 w-4 h-4 text-neutral-500" />
                       <input
                         type="text"
@@ -864,7 +885,7 @@ export default function App() {
                         className="w-full pl-11 pr-4 py-2.5 bg-[#050505] border border-neutral-800 rounded-xl text-sm text-neutral-100 outline-none focus:ring-2 focus:ring-red-600 shadow-inner"
                       />
                     </div>
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-3 w-full md:w-auto justify-end">
                       <button
                         onClick={() =>
                           exportarACSV(inventario, 'inventario_aluria')
@@ -959,8 +980,8 @@ export default function App() {
               {/* VISTA CLIENTES */}
               {vista === 'clientes' && (
                 <div className="rounded-3xl overflow-hidden animate-fade-in border border-[#2b0d0d] bg-[#0d0d0d] shadow-2xl">
-                  <div className="p-5 border-b border-[#2b0d0d] flex justify-between items-center bg-[#140a0a]">
-                    <div className="relative w-1/3">
+                  <div className="p-5 border-b border-[#2b0d0d] flex flex-col md:flex-row justify-between items-center bg-[#140a0a] gap-4">
+                    <div className="relative w-full md:w-1/3">
                       <Search className="absolute left-3.5 top-3 w-4 h-4 text-neutral-500" />
                       <input
                         type="text"
@@ -970,7 +991,7 @@ export default function App() {
                         className="w-full pl-11 pr-4 py-2.5 bg-[#050505] border border-neutral-800 rounded-xl text-sm text-neutral-100 outline-none focus:ring-2 focus:ring-red-600 shadow-inner"
                       />
                     </div>
-                    <div className="flex items-center gap-3">
+                    <div className="flex flex-wrap items-center gap-3 w-full md:w-auto justify-end">
                       <button
                         onClick={() =>
                           exportarACSV(clientes, 'clientes_aluria')
@@ -1679,6 +1700,7 @@ export default function App() {
   );
 }
 
+// Componente para botones del menú en Computadora
 function BotonesMenu({ icono, texto, vista, vistaActual, setVista }) {
   const activo = vistaActual === vista;
   return (
@@ -1692,6 +1714,24 @@ function BotonesMenu({ icono, texto, vista, vistaActual, setVista }) {
     >
       {icono}
       <span className="text-sm tracking-wide">{texto}</span>
+    </button>
+  );
+}
+
+// Componente para los botones de la barra inferior en Celulares
+function BotonMobile({ icono, texto, vista, vistaActual, setVista }) {
+  const activo = vistaActual === vista;
+  return (
+    <button
+      onClick={() => setVista(vista)}
+      className={`flex flex-col items-center justify-center py-1.5 px-2 rounded-xl transition-all ${
+        activo
+          ? 'text-red-500 font-bold scale-105'
+          : 'text-neutral-400 hover:text-neutral-200 font-medium'
+      }`}
+    >
+      {icono}
+      <span className="text-[10px] tracking-tight mt-1">{texto}</span>
     </button>
   );
 }
