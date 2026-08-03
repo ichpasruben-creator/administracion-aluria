@@ -88,17 +88,31 @@ export default function App() {
     };
   }, [session]);
 
+  // --- CARGA DE DATOS CON ALERTA DE ERRORES ---
   async function cargarDatos() {
     try {
       setCargando(true);
-      const { data: inv } = await supabase.from('inventario').select('*').order('id', { ascending: true });
-      const { data: cli } = await supabase.from('clientes').select('*');
-      const { data: pag } = await supabase.from('pagos').select('*');
-      if (inv) setInventario(inv);
+      const { data: inv, error: errInv } = await supabase.from('inventario').select('*');
+      const { data: cli, error: errCli } = await supabase.from('clientes').select('*');
+      const { data: pag, error: errPag } = await supabase.from('pagos').select('*');
+
+      if (errInv) throw errInv;
+      if (errCli) throw errCli;
+      if (errPag) throw errPag;
+
+      if (inv) {
+        const invOrdenado = inv.sort((a, b) => a.id - b.id);
+        setInventario(invOrdenado);
+      }
       if (cli) setClientes(cli);
       if (pag) setPagos(pag);
+
     } catch (error) {
       console.error('Error al sincronizar con Supabase', error);
+      mostrarNotificacion('Error cargando datos: ' + error.message, 'error');
+      if (error.message && error.message.includes('JWT')) {
+        handleLogout();
+      }
     } finally {
       setCargando(false);
     }
@@ -122,6 +136,9 @@ export default function App() {
 
   async function handleLogout() {
     await supabase.auth.signOut();
+    setInventario([]);
+    setClientes([]);
+    setPagos([]);
   }
 
   function exportarACSV(data, filename) {
@@ -145,6 +162,7 @@ export default function App() {
   const [modalInv, setModalInv] = useState(false);
   const [modalCli, setModalCli] = useState(false);
   const [modalCaja, setModalCaja] = useState(false);
+  const [modalReemplazo, setModalReemplazo] = useState(false); // NUEVO MODAL
 
   const [busquedaInv, setBusquedaInv] = useState('');
   const [busquedaCli, setBusquedaCli] = useState('');
@@ -155,6 +173,8 @@ export default function App() {
   const [loteCosto, setLoteCosto] = useState('');
   const [lotePrecio, setLotePrecio] = useState('');
   const [loteCorreos, setLoteCorreos] = useState('');
+  
+  const [textoReemplazo, setTextoReemplazo] = useState(''); // NUEVO ESTADO PARA REEMPLAZOS
 
   const [gastoCategoria, setGastoCategoria] = useState('Comida');
   const [gastoConcepto, setGastoConcepto] = useState('');
@@ -228,6 +248,62 @@ export default function App() {
       mostrarNotificacion('Error al actualizar pago: ' + error.message, 'error');
     }
   }
+
+  // --- NUEVA FUNCIÓN: REEMPLAZO INTELIGENTE DE CAÍDAS ---
+  async function procesarReemplazos(e) {
+    e.preventDefault();
+    
+    // Extraemos TODOS los correos del texto pegado (sin importar las palabras o emojis extra)
+    const regexCorreos = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
+    const correosEncontrados = textoReemplazo.match(regexCorreos) || [];
+
+    // Verificamos que sea un número par (1 antiguo y 1 nuevo, 2 antiguos y 2 nuevos, etc.)
+    if (correosEncontrados.length === 0 || correosEncontrados.length % 2 !== 0) {
+      return mostrarNotificacion('Error: El formato debe contener pares exactos de correos (Antiguo y Nuevo).', 'error');
+    }
+
+    setCargando(true);
+    try {
+      let reemplazados = 0;
+      let noEncontrados = 0;
+
+      // Iteramos de 2 en 2 (índice 0=Viejo, índice 1=Nuevo)
+      for (let i = 0; i < correosEncontrados.length; i += 2) {
+        const cAntiguo = correosEncontrados[i].toLowerCase().trim();
+        const cNuevo = correosEncontrados[i + 1].toLowerCase().trim();
+
+        // 1. Buscamos el correo antiguo en el inventario
+        const itemInv = inventario.find(inv => (inv.correo || '').toLowerCase().trim() === cAntiguo);
+
+        if (itemInv) {
+          // 2. Actualizamos el correo en el inventario (mantiene proveedor y costo)
+          await supabase.from('inventario').update({ correo: cNuevo }).eq('id', itemInv.id);
+
+          // 3. Si estaba asignado a un cliente, le actualizamos su ficha también
+          if (itemInv.estado === 'Asignada') {
+            const cliMatch = clientes.find(c => (c.cuenta || '').toLowerCase().includes(cAntiguo));
+            if (cliMatch) {
+              const nuevaCuentaStr = cliMatch.cuenta.replace(new RegExp(cAntiguo, 'i'), cNuevo);
+              await supabase.from('clientes').update({ cuenta: nuevaCuentaStr }).eq('id', cliMatch.id);
+            }
+          }
+          reemplazados++;
+        } else {
+          noEncontrados++;
+        }
+      }
+
+      mostrarNotificacion(`✅ ${reemplazados} reemplazos listos. ${noEncontrados > 0 ? `⚠️ ${noEncontrados} no encontrados en sistema.` : ''}`, 'success');
+      setModalReemplazo(false);
+      setTextoReemplazo('');
+      cargarDatos();
+    } catch (error) {
+      mostrarNotificacion('Error al procesar reemplazos: ' + error.message, 'error');
+    } finally {
+      setCargando(false);
+    }
+  }
+
 
   // --- LIMPIEZA DE DUPLICADOS ---
   async function limpiarDuplicados() {
@@ -355,7 +431,6 @@ export default function App() {
     }
   }
 
-  // --- ABRIR MODAL DESDE INVENTARIO ---
   function abrirModalAsignarDesdeInventario(correo) {
     setCliCuentaAsignada(correo);
     setCliNom('');
@@ -363,7 +438,6 @@ export default function App() {
     setModalCli(true);
   }
 
-  // --- ASIGNACIÓN MULTIPLE INTELIGENTE ---
   async function guardarClienteNuevo(e) {
     e.preventDefault();
 
@@ -519,7 +593,6 @@ export default function App() {
     );
   }
 
-  // --- CÁLCULOS FINANCIEROS (CORREGIDOS Y PRECISOS) ---
   const numTc = parseFloat(tc) || 3.42;
 
   let costoStockVendidoUsdt = 0;
@@ -554,7 +627,6 @@ export default function App() {
     else if (p.tipo === 'Egreso') cajaEgresos += parseFloat(p.monto) || 0;
   });
 
-  // La matemática correcta de Rentabilidad
   const egresosVentasSoles = (costoStockVendidoUsdt * numTc) + cajaEgresos;
   const ingresosTotalesSoles = ingresosSoles + cajaIngresos;
   const gananciaNeta = ingresosTotalesSoles - egresosVentasSoles;
@@ -562,7 +634,6 @@ export default function App() {
 
   const hoyStr = new Date().toISOString().split('T')[0];
 
-  // AGRUPACIONES PARA EL DASHBOARD
   const cuentasQueVencenHoyAgrupadas = agruparPorWhatsapp(clientes.filter((c) => c.fin === hoyStr));
   const deudasPendientesAgrupadas = agruparPorWhatsapp(clientes.filter((c) => c.pago === 'Pendiente'));
   
@@ -700,7 +771,6 @@ export default function App() {
                     </button>
                   </div>
 
-                  {/* NUEVA TARJETA DE CAPITAL INVERTIDO */}
                   <div className="p-4 rounded-2xl bg-neutral-900/40 border border-neutral-800/60 flex flex-col md:flex-row justify-between items-start md:items-center text-sm font-semibold text-neutral-300 shadow-inner gap-2">
                     <span className="flex items-center gap-2 text-amber-500/80"><Package className="w-5 h-5"/> Capital Invertido en Cuentas Libres (Por Vender):</span>
                     <span className="text-white font-mono font-bold text-lg">S/ {capitalLibreSoles.toFixed(2)} <span className="text-neutral-500 text-xs font-normal">({capitalStockLibreUsdt.toFixed(2)} USDT)</span></span>
@@ -801,7 +871,6 @@ export default function App() {
                 </div>
               )}
 
-              {/* VISTA VENTAS (AHORA LIMITADA Y ESTRICTA) */}
               {vista === 'ventas' && (
                 <div className="space-y-6 animate-fade-in">
                   <div className="flex justify-between items-center">
@@ -847,10 +916,15 @@ export default function App() {
                       <input type="text" value={busquedaInv} onChange={(e) => setBusquedaInv(e.target.value)} placeholder="Buscar correo o proveedor..." className="w-full pl-11 pr-4 py-2.5 bg-[#050505] border border-neutral-800 rounded-xl text-sm text-neutral-100 outline-none focus:ring-2 focus:ring-red-600 shadow-inner" />
                     </div>
                     <div className="flex flex-wrap items-center gap-3 w-full md:w-auto justify-end">
+                      {/* BOTÓN NUEVO: REEMPLAZOS DE CAÍDAS */}
+                      <button onClick={() => setModalReemplazo(true)} className="bg-gradient-to-r from-purple-900 to-red-900 hover:from-purple-800 hover:to-red-800 text-white px-4 py-2.5 rounded-xl text-sm font-bold transition border border-red-800/50 flex items-center gap-2 shadow-sm">
+                        <RefreshCw className="w-4 h-4" /> Reemplazar Caídas
+                      </button>
+
                       <button onClick={limpiarDuplicados} className="bg-red-950 hover:bg-red-900 text-red-400 px-4 py-2.5 rounded-xl text-sm font-semibold transition border border-red-900/50 flex items-center gap-2 shadow-sm">
                         <Trash2 className="w-4 h-4" /> Limpiar Duplicados
                       </button>
-                      <button onClick={() => exportarACSV(inventario, 'inventario_aluria')} className="bg-[#141414] hover:bg-neutral-800 text-neutral-200 px-4 py-2.5 rounded-xl text-sm font-semibold transition border border-neutral-800 flex items-center gap-2 shadow-sm"><Download className="w-4 h-4" /> Exportar CSV</button>
+                      <button onClick={() => exportarACSV(inventario, 'inventario_aluria')} className="bg-[#141414] hover:bg-neutral-800 text-neutral-200 px-4 py-2.5 rounded-xl text-sm font-semibold transition border border-neutral-800 flex items-center gap-2 shadow-sm"><Download className="w-4 h-4" /> CSV</button>
                       <button onClick={() => setModalInv(true)} className="bg-gradient-to-r from-[#800f11] to-red-600 hover:from-red-700 hover:to-red-500 text-white px-5 py-2.5 rounded-xl text-sm font-bold transition shadow-md shadow-red-950 flex items-center gap-2"><Plus className="w-4 h-4" /> Importar Lote</button>
                     </div>
                   </div>
@@ -1107,6 +1181,45 @@ export default function App() {
         </div>
       )}
 
+      {/* MODAL REEMPLAZO DE CAÍDAS */}
+      {modalReemplazo && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-50 flex justify-center items-center p-4">
+          <div className="bg-[#0d0d0d] border border-[#3b0909] rounded-3xl w-full max-w-lg p-8 space-y-6 shadow-2xl shadow-red-950">
+            <div className="flex justify-between items-center border-b border-[#2b0d0d] pb-4">
+              <h3 className="text-xl font-extrabold text-white flex items-center gap-2">
+                <RefreshCw className="w-6 h-6 text-red-500" /> Reemplazo de Caídas
+              </h3>
+              <button onClick={() => setModalReemplazo(false)} className="text-neutral-400 hover:text-white"><X className="w-6 h-6" /></button>
+            </div>
+            
+            <p className="text-sm text-neutral-400 leading-relaxed">
+              Pega el texto exactamente como te lo mandan. El sistema detectará en <strong className="text-red-400">pares</strong> los correos: el primero será el Antiguo y el segundo el Nuevo. Actualizará el stock y la cuenta del cliente automáticamente.
+            </p>
+
+            <form onSubmit={procesarReemplazos} className="space-y-5">
+              <div>
+                <label className="text-xs font-bold uppercase tracking-wider text-neutral-400 mb-2 block">
+                  Pegar formato de reemplazo
+                </label>
+                <textarea 
+                  rows="6" 
+                  required 
+                  value={textoReemplazo} 
+                  onChange={(e) => setTextoReemplazo(e.target.value)} 
+                  placeholder="Ejemplo:&#10;🔁 Correo antiguo: falcon@gmail.com&#10;➡️ Correo nuevo: nuevo@gmail.com" 
+                  className="w-full bg-[#050505] border border-neutral-800 rounded-xl p-3 text-sm text-white outline-none font-mono resize-none focus:ring-2 focus:ring-red-600 shadow-inner"
+                ></textarea>
+              </div>
+
+              <div className="flex justify-end gap-3 pt-4 border-t border-[#2b0d0d]">
+                <button type="button" onClick={() => setModalReemplazo(false)} className="px-5 py-2.5 text-neutral-400 hover:text-white text-sm font-bold">Cancelar</button>
+                <button type="submit" className="px-6 py-2.5 bg-gradient-to-r from-purple-900 to-red-800 hover:from-purple-800 hover:to-red-700 text-white rounded-xl text-sm font-bold shadow-lg shadow-red-950">Ejecutar Reemplazo</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* MODAL ASIGNAR CLIENTE MÚLTIPLE INTELIGENTE */}
       {modalCli && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-50 flex justify-center items-center p-4">
@@ -1116,7 +1229,6 @@ export default function App() {
               <button onClick={() => setModalCli(false)} className="text-neutral-400 hover:text-white"><X className="w-6 h-6" /></button>
             </div>
             
-            {/* NUEVO SELECTOR DE CLIENTES EXISTENTES */}
             <div className="bg-[#140a0a] p-4 rounded-xl border border-red-900/30 mb-2">
               <label className="text-xs font-bold uppercase tracking-wider text-red-400 mb-1.5 block">¿Es un cliente registrado?</label>
               <select 
