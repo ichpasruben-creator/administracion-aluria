@@ -242,6 +242,17 @@ export default function App() {
     }
   }
 
+  async function marcarComoPagado(id) {
+    try {
+      const { error } = await supabase.from('clientes').update({ pago: 'Pagado' }).eq('id', id);
+      if (error) throw error;
+      mostrarNotificacion('Deuda saldada correctamente', 'success');
+      cargarDatos();
+    } catch (error) {
+      mostrarNotificacion('Error al actualizar pago: ' + error.message, 'error');
+    }
+  }
+
   async function sacarDelStock(id, correo) {
     if (!confirm(`¿Dar de baja la cuenta ${correo}? Saldrá del stock permanentemente.`)) return;
     try {
@@ -325,24 +336,51 @@ export default function App() {
     }
   }
 
+  // --- ASIGNACIÓN MULTIPLE INTELIGENTE ---
   async function guardarClienteNuevo(e) {
     e.preventDefault();
-    const itemLibre = inventario.find(
-      (i) => i.correo === cliCuentaAsignada && i.estado === 'Disponible'
-    );
 
-    if (!itemLibre) {
-      mostrarNotificacion('La cuenta ya fue asignada o no existe', 'error');
+    // 1. Extraemos los correos de lo que pegaste
+    const regexCorreos = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
+    const correosPega = cliCuentaAsignada.match(regexCorreos) || [];
+
+    if (correosPega.length === 0) {
+      mostrarNotificacion('No se detectaron correos en el texto ingresado', 'error');
       return;
     }
 
-    try {
-      await supabase
-        .from('inventario')
-        .update({ estado: 'Asignada', cliente_asignado: cliNom }) 
-        .eq('id', itemLibre.id);
+    // 2. Filtramos duplicados en tu texto
+    const correosUnicos = [...new Set(correosPega.map(c => c.toLowerCase().trim()))];
+    const itemsAAsignar = [];
+    const correosNoDisponibles = [];
 
-      const nuevoCliente = {
+    // 3. Verificamos si existen en tu inventario libre
+    for (const correo of correosUnicos) {
+      const itemLibre = inventario.find(i => (i.correo || '').toLowerCase() === correo && i.estado === 'Disponible');
+      if (itemLibre) {
+        itemsAAsignar.push(itemLibre);
+      } else {
+        correosNoDisponibles.push(correo);
+      }
+    }
+
+    if (correosNoDisponibles.length > 0) {
+      mostrarNotificacion(`Error: ${correosNoDisponibles.length} correos no están en stock o ya se vendieron.`, 'error');
+      return; 
+    }
+
+    try {
+      // 4. Actualizamos el estado a "Asignada" en el Inventario para TODAS de golpe
+      const idsToUpdate = itemsAAsignar.map(i => i.id);
+      const { error: invError } = await supabase
+        .from('inventario')
+        .update({ estado: 'Asignada', cliente_asignado: cliNom })
+        .in('id', idsToUpdate);
+        
+      if (invError) throw invError;
+
+      // 5. Creamos un registro de cliente por cada cuenta vendida
+      const nuevosClientes = itemsAAsignar.map(itemLibre => ({
         whatsapp: cliNum,
         nombre: cliNom,
         cuenta: `${itemLibre.correo} (${itemLibre.proveedor})`,
@@ -350,20 +388,20 @@ export default function App() {
         fin: cliFin,
         estado: 'Activo',
         pago: cliPago,
-      };
+      }));
 
-      const { error } = await supabase.from('clientes').insert([nuevoCliente]);
-      if (error) throw error;
+      const { error: cliError } = await supabase.from('clientes').insert(nuevosClientes);
+      if (cliError) throw cliError;
 
       setModalCli(false);
-      mostrarNotificacion('¡Cuenta asignada con éxito!', 'success');
+      mostrarNotificacion(`¡${itemsAAsignar.length} cuentas asignadas exitosamente a ${cliNom}!`, 'success');
       cargarDatos();
       
       setCliNom('');
       setCliNum('');
       setCliCuentaAsignada('');
     } catch (error) {
-      mostrarNotificacion('Error al guardar cliente: ' + error.message, 'error');
+      mostrarNotificacion('Error al guardar asignaciones: ' + error.message, 'error');
     }
   }
 
@@ -387,18 +425,6 @@ export default function App() {
       cargarDatos();
     } catch (error) {
       mostrarNotificacion('Error en control de gastos: ' + error.message, 'error');
-    }
-  }
-
-  async function eliminarCuentaInv(id, correo) {
-    if (!confirm(`¿Eliminar cuenta ${correo}?`)) return;
-    try {
-      const { error } = await supabase.from('inventario').delete().eq('id', id);
-      if (error) throw error;
-      mostrarNotificacion('Cuenta eliminada', 'success');
-      cargarDatos();
-    } catch (error) {
-      mostrarNotificacion('Error al eliminar: ' + error.message, 'error');
     }
   }
 
@@ -474,19 +500,30 @@ export default function App() {
   const libres = inventario.filter((i) => i.estado === 'Disponible').length;
   const numTc = parseFloat(tc) || 3.42;
 
+  // --- CÁLCULOS FINANCIEROS CORREGIDOS ---
   let egresosUsdt = 0;
-  let ingresosSoles = 0;
   inventario.forEach((item) => {
     egresosUsdt += parseFloat(item.costo) || 0;
-    if (item.estado === 'Asignada')
-      ingresosSoles += parseFloat(item.precio_venta) || 0; 
   });
 
+  // Solo suma Ingresos por Ventas si el cliente realmente ha pagado
+  let ingresosSoles = 0;
+  clientes.forEach((cli) => {
+    if (cli.pago === 'Pagado') {
+      const correoBase = cli.cuenta ? cli.cuenta.split(' (')[0].trim().toLowerCase() : '';
+      const invItem = inventario.find((i) => (i.correo || '').toLowerCase() === correoBase);
+      if (invItem) {
+        ingresosSoles += parseFloat(invItem.precio_venta) || 0;
+      }
+    }
+  });
+
+  // Separa correctamente Ingresos Extras de los Egresos
   let cajaIngresos = 0;
   let cajaEgresos = 0;
   pagos.forEach((p) => {
     if (p.tipo === 'Ingreso') cajaIngresos += parseFloat(p.monto) || 0;
-    else cajaEgresos += parseFloat(p.monto) || 0;
+    else if (p.tipo === 'Egreso') cajaEgresos += parseFloat(p.monto) || 0;
   });
 
   const egresosTotalesSoles = egresosUsdt * numTc + cajaEgresos;
@@ -501,21 +538,18 @@ export default function App() {
       i.proveedor.toLowerCase().includes(busquedaGestion.toLowerCase())
   );
 
+  // Las tarjetas de gastos ya NO restarán ni mezclarán tus "Ingresos Extras"
   const gastosComida = pagos
-    .filter((p) => p.concepto && p.concepto.includes('[Comida]'))
+    .filter((p) => p.tipo === 'Egreso' && p.concepto && p.concepto.includes('[Comida]'))
     .reduce((a, b) => a + parseFloat(b.monto || 0), 0);
   const gastosPasajes = pagos
-    .filter((p) => p.concepto && p.concepto.includes('[Pasajes]'))
+    .filter((p) => p.tipo === 'Egreso' && p.concepto && p.concepto.includes('[Pasajes]'))
     .reduce((a, b) => a + parseFloat(b.monto || 0), 0);
   const gastosDetalles = pagos
-    .filter((p) => p.concepto && p.concepto.includes('[Detalles]'))
+    .filter((p) => p.tipo === 'Egreso' && p.concepto && p.concepto.includes('[Detalles]'))
     .reduce((a, b) => a + parseFloat(b.monto || 0), 0);
   const gastosOtros = pagos
-    .filter(
-      (p) =>
-        p.concepto &&
-        (p.concepto.includes('[Otros]') || !p.concepto.includes('['))
-    )
+    .filter((p) => p.tipo === 'Egreso' && p.concepto && (p.concepto.includes('[Otros]') || !p.concepto.includes('[')))
     .reduce((a, b) => a + parseFloat(b.monto || 0), 0);
 
   const inventarioFiltrado = inventario.filter(
@@ -627,10 +661,18 @@ export default function App() {
                     <div className="p-7 rounded-3xl border-t-4 border-t-red-600 border border-[#2b0d0d] bg-gradient-to-b from-[#140a0a] to-[#0a0505] shadow-2xl relative overflow-hidden">
                       <h3 className="text-neutral-400 text-xs uppercase tracking-widest font-extrabold mb-3">Ventas + Ingresos (S/)</h3>
                       <p className="text-4xl font-black text-white">S/ {ingresosTotalesSoles.toFixed(2)}</p>
+                      <div className="mt-3 pt-3 border-t border-red-900/30 flex justify-between text-xs font-bold text-neutral-400">
+                        <span>Cuentas Vendidas: S/ {ingresosSoles.toFixed(2)}</span>
+                        <span className="text-red-400">Extras: S/ {cajaIngresos.toFixed(2)}</span>
+                      </div>
                     </div>
                     <div className="p-7 rounded-3xl border-t-4 border-t-[#6b1414] border border-[#2b0d0d] bg-gradient-to-b from-[#140a0a] to-[#0a0505] shadow-2xl relative overflow-hidden">
                       <h3 className="text-neutral-400 text-xs uppercase tracking-widest font-extrabold mb-3">Egresos Totales (S/)</h3>
                       <p className="text-4xl font-black text-red-500">S/ {egresosTotalesSoles.toFixed(2)}</p>
+                      <div className="mt-3 pt-3 border-t border-red-900/30 flex justify-between text-xs font-bold text-red-900/60">
+                        <span>Stock (USDTxTC): S/ {(egresosUsdt * numTc).toFixed(2)}</span>
+                        <span>Gastos: S/ {cajaEgresos.toFixed(2)}</span>
+                      </div>
                     </div>
                     <div className="p-7 rounded-3xl border-t-4 border-t-neutral-400 border border-[#2b0d0d] bg-gradient-to-b from-[#140a0a] to-[#0a0505] shadow-2xl relative overflow-hidden">
                       <h3 className="text-neutral-400 text-xs uppercase tracking-widest font-extrabold mb-3">Ganancia Neta (S/)</h3>
@@ -672,7 +714,10 @@ export default function App() {
                           clientes.filter((c) => c.pago === 'Pendiente').map((cli) => (
                             <div key={cli.id} className="flex justify-between items-center py-3 border-b border-neutral-900 text-sm">
                               <span className="font-bold text-gray-200">{cli.nombre}</span>
-                              <a href={`https://wa.me/${cli.whatsapp}?text=Hola,%20tienes%20un%20pago%20pendiente.`} target="_blank" rel="noreferrer" className="text-red-400 bg-red-950/40 border border-red-900/50 px-3.5 py-1.5 rounded-xl text-xs font-bold hover:bg-red-900/40 transition">Cobrar</a>
+                              <div className="flex items-center gap-2">
+                                <button onClick={() => marcarComoPagado(cli.id)} className="text-green-400 bg-green-950/40 border border-green-900/50 px-3.5 py-1.5 rounded-xl text-xs font-bold hover:bg-green-900/40 transition">✓ Pagó</button>
+                                <a href={`https://wa.me/${cli.whatsapp}?text=Hola,%20tienes%20un%20pago%20pendiente.`} target="_blank" rel="noreferrer" className="text-red-400 bg-red-950/40 border border-red-900/50 px-3.5 py-1.5 rounded-xl text-xs font-bold hover:bg-red-900/40 transition">Cobrar Wp</a>
+                              </div>
                             </div>
                           ))
                         )}
@@ -751,7 +796,7 @@ export default function App() {
                       <Search className="absolute left-3.5 top-3 w-4 h-4 text-neutral-500" />
                       <input type="text" value={busquedaInv} onChange={(e) => setBusquedaInv(e.target.value)} placeholder="Buscar correo o proveedor..." className="w-full pl-11 pr-4 py-2.5 bg-[#050505] border border-neutral-800 rounded-xl text-sm text-neutral-100 outline-none focus:ring-2 focus:ring-red-600 shadow-inner" />
                     </div>
-                    <div className="flex flex-wrap items-center gap-3 w-full md:w-auto justify-end">
+                    <div className="flex items-center gap-3 w-full md:w-auto justify-end">
                       <button onClick={limpiarDuplicados} className="bg-red-950 hover:bg-red-900 text-red-400 px-4 py-2.5 rounded-xl text-sm font-semibold transition border border-red-900/50 flex items-center gap-2 shadow-sm">
                         <Trash2 className="w-4 h-4" /> Limpiar Duplicados
                       </button>
@@ -886,9 +931,6 @@ export default function App() {
                       <input type="text" value={busquedaGestion} onChange={(e) => setBusquedaGestion(e.target.value)} placeholder="Buscar por correo o proveedor..." className="w-full pl-11 pr-4 py-2.5 bg-[#050505] border border-neutral-800 rounded-xl text-sm text-neutral-100 outline-none focus:ring-2 focus:ring-red-600 shadow-inner" />
                     </div>
                     <div className="flex items-center gap-3 w-full md:w-auto justify-end">
-                      <button onClick={limpiarDuplicados} className="bg-red-950 hover:bg-red-900 text-red-400 px-4 py-2.5 rounded-xl text-sm font-semibold transition border border-red-900/50 flex items-center gap-2 shadow-sm">
-                        <Trash2 className="w-4 h-4" /> Limpiar Duplicados
-                      </button>
                       <span className="text-xs font-semibold text-neutral-400 bg-neutral-900 px-4 py-2 rounded-xl border border-neutral-800">Total registros: <strong className="text-white">{inventario.length}</strong> cuentas</span>
                     </div>
                   </div>
@@ -968,7 +1010,7 @@ export default function App() {
         </div>
       </main>
 
-      {/* MODAL IMPORTAR INVENTARIO CON REGEX */}
+      {/* MODAL IMPORTAR INVENTARIO */}
       {modalInv && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-50 flex justify-center items-center p-4">
           <div className="bg-[#0d0d0d] border border-[#3b0909] rounded-3xl w-full max-w-lg p-8 space-y-6 shadow-2xl shadow-red-950">
@@ -993,12 +1035,12 @@ export default function App() {
               </div>
 
               <div>
-                <label className="text-xs font-bold uppercase tracking-wider text-neutral-400 mb-2 block flex items-center gap-2"><Upload className="w-4 h-4 text-red-500" /> Subir Archivo de Bloc de Notas (.txt) o Pegar Debajo</label>
+                <label className="text-xs font-bold uppercase tracking-wider text-neutral-400 mb-2 block flex items-center gap-2"><Upload className="w-4 h-4 text-red-500" /> Subir Archivo (.txt)</label>
                 <input type="file" accept=".txt" onChange={manejarSubidaArchivoTxt} className="w-full text-xs text-neutral-400 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-red-950/40 file:text-red-300 hover:file:bg-red-900/40 cursor-pointer border border-neutral-800 rounded-xl p-2 bg-[#050505]" />
               </div>
 
               <div>
-                <label className="text-xs font-bold uppercase tracking-wider text-neutral-400 mb-2 block">Lista de Correos (Se extraerán automáticamente)</label>
+                <label className="text-xs font-bold uppercase tracking-wider text-neutral-400 mb-2 block">O pega el texto aquí (Se extraerán automáticamente)</label>
                 <textarea rows="5" required value={loteCorreos} onChange={(e) => setLoteCorreos(e.target.value)} placeholder="Pega o carga el texto aquí..." className="w-full bg-[#050505] border border-neutral-800 rounded-xl p-3 text-sm text-white outline-none font-mono resize-none focus:ring-2 focus:ring-red-600 shadow-inner"></textarea>
               </div>
               <div className="flex justify-end gap-3 pt-4 border-t border-[#2b0d0d]">
@@ -1010,11 +1052,12 @@ export default function App() {
         </div>
       )}
 
+      {/* MODAL ASIGNAR CLIENTE MÚLTIPLE */}
       {modalCli && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-50 flex justify-center items-center p-4">
           <div className="bg-[#0d0d0d] border border-[#3b0909] rounded-3xl w-full max-w-md p-8 space-y-5 shadow-2xl shadow-red-950">
             <div className="flex justify-between items-center border-b border-[#2b0d0d] pb-4">
-              <h3 className="text-xl font-extrabold text-white">Asignar Cuenta a Cliente</h3>
+              <h3 className="text-xl font-extrabold text-white">Asignar Cliente</h3>
               <button onClick={() => setModalCli(false)} className="text-neutral-400 hover:text-white"><X className="w-6 h-6" /></button>
             </div>
             <form onSubmit={guardarClienteNuevo} className="space-y-4">
@@ -1026,15 +1069,20 @@ export default function App() {
                 <label className="text-xs font-bold uppercase tracking-wider text-neutral-400 mb-1.5 block">WhatsApp</label>
                 <input type="text" required value={cliNum} onChange={(e) => setCliNum(e.target.value)} placeholder="Ej. 987654321" className="w-full bg-[#050505] border border-neutral-800 rounded-xl p-3 text-sm text-white outline-none focus:ring-2 focus:ring-red-600 shadow-inner" />
               </div>
+              
+              {/* NUEVO CAMPO INTELIGENTE DE TEXTO */}
               <div>
-                <label className="text-xs font-bold uppercase tracking-wider text-neutral-400 mb-1.5 block">Cuenta Disponible en Stock:</label>
-                <select required value={cliCuentaAsignada} onChange={(e) => setCliCuentaAsignada(e.target.value)} className="w-full bg-[#050505] border border-neutral-800 rounded-xl p-3 text-sm text-white outline-none focus:ring-2 focus:ring-red-600 shadow-inner">
-                  <option value="">-- Selecciona una cuenta --</option>
-                  {inventario.filter((i) => i.estado === 'Disponible').map((item) => (
-                    <option key={item.id} value={item.correo}>{item.correo} ({item.proveedor})</option>
-                  ))}
-                </select>
+                <label className="text-xs font-bold uppercase tracking-wider text-neutral-400 mb-1.5 block">Cuentas a Asignar (Pega texto o correos)</label>
+                <textarea 
+                  required 
+                  rows="3"
+                  value={cliCuentaAsignada} 
+                  onChange={(e) => setCliCuentaAsignada(e.target.value)} 
+                  placeholder="Pega aquí los correos o los bloques que copiaste de Ventas Rápidas..."
+                  className="w-full bg-[#050505] border border-neutral-800 rounded-xl p-3 text-sm text-white outline-none focus:ring-2 focus:ring-red-600 shadow-inner resize-none"
+                ></textarea>
               </div>
+
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="text-xs font-bold uppercase tracking-wider text-neutral-400 mb-1.5 block">Fecha Inicio</label>
@@ -1061,6 +1109,7 @@ export default function App() {
         </div>
       )}
 
+      {/* MODAL GASTOS */}
       {modalCaja && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-50 flex justify-center items-center p-4">
           <div className="bg-[#0d0d0d] border border-[#3b0909] rounded-3xl w-full max-w-md p-8 space-y-5 shadow-2xl shadow-red-950">
