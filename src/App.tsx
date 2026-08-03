@@ -25,6 +25,7 @@ import {
   PieChart,
   Sparkles,
   Upload,
+  UserPlus
 } from 'lucide-react';
 
 export default function App() {
@@ -207,7 +208,6 @@ export default function App() {
         const nuevaFecha = d.toISOString().split('T')[0];
         idsActualizados.push({ id: c.id, fin: nuevaFecha, pago: 'Pagado' });
         
-        // Actualizamos uno por uno (o podríamos hacer un bulk update)
         await supabase.from('clientes').update({ fin: nuevaFecha, pago: 'Pagado' }).eq('id', c.id);
       }
       mostrarNotificacion(`Cuentas renovadas exitosamente`, 'success');
@@ -355,6 +355,14 @@ export default function App() {
     }
   }
 
+  // --- ABRIR MODAL DESDE INVENTARIO ---
+  function abrirModalAsignarDesdeInventario(correo) {
+    setCliCuentaAsignada(correo);
+    setCliNom('');
+    setCliNum('');
+    setModalCli(true);
+  }
+
   // --- ASIGNACIÓN MULTIPLE INTELIGENTE ---
   async function guardarClienteNuevo(e) {
     e.preventDefault();
@@ -381,7 +389,7 @@ export default function App() {
     }
 
     if (correosNoDisponibles.length > 0) {
-      mostrarNotificacion(`Error: ${correosNoDisponibles.length} correos no están en stock o ya se vendieron.`, 'error');
+      mostrarNotificacion(`Error: ${correosNoDisponibles.length} correos no están libres en stock.`, 'error');
       return; 
     }
 
@@ -511,14 +519,22 @@ export default function App() {
     );
   }
 
-  const libres = inventario.filter((i) => i.estado === 'Disponible').length;
+  // --- CÁLCULOS FINANCIEROS (CORREGIDOS Y PRECISOS) ---
   const numTc = parseFloat(tc) || 3.42;
 
-  // --- CÁLCULOS FINANCIEROS ---
-  let egresosUsdt = 0;
+  let costoStockVendidoUsdt = 0;
+  let capitalStockLibreUsdt = 0;
+
   inventario.forEach((item) => {
-    egresosUsdt += parseFloat(item.costo) || 0;
+    if (item.estado === 'Asignada') {
+      costoStockVendidoUsdt += parseFloat(item.costo) || 0;
+    } else if (item.estado === 'Disponible') {
+      capitalStockLibreUsdt += parseFloat(item.costo) || 0;
+    }
   });
+
+  const cuentasLibres = inventario.filter((i) => i.estado === 'Disponible' && (!i.cliente_asignado || i.cliente_asignado.trim() === ''));
+  const libres = cuentasLibres.length;
 
   let ingresosSoles = 0;
   clientes.forEach((cli) => {
@@ -538,9 +554,11 @@ export default function App() {
     else if (p.tipo === 'Egreso') cajaEgresos += parseFloat(p.monto) || 0;
   });
 
-  const egresosTotalesSoles = egresosUsdt * numTc + cajaEgresos;
+  // La matemática correcta de Rentabilidad
+  const egresosVentasSoles = (costoStockVendidoUsdt * numTc) + cajaEgresos;
   const ingresosTotalesSoles = ingresosSoles + cajaIngresos;
-  const gananciaNeta = ingresosTotalesSoles - egresosTotalesSoles;
+  const gananciaNeta = ingresosTotalesSoles - egresosVentasSoles;
+  const capitalLibreSoles = capitalStockLibreUsdt * numTc;
 
   const hoyStr = new Date().toISOString().split('T')[0];
 
@@ -682,9 +700,15 @@ export default function App() {
                     </button>
                   </div>
 
+                  {/* NUEVA TARJETA DE CAPITAL INVERTIDO */}
+                  <div className="p-4 rounded-2xl bg-neutral-900/40 border border-neutral-800/60 flex flex-col md:flex-row justify-between items-start md:items-center text-sm font-semibold text-neutral-300 shadow-inner gap-2">
+                    <span className="flex items-center gap-2 text-amber-500/80"><Package className="w-5 h-5"/> Capital Invertido en Cuentas Libres (Por Vender):</span>
+                    <span className="text-white font-mono font-bold text-lg">S/ {capitalLibreSoles.toFixed(2)} <span className="text-neutral-500 text-xs font-normal">({capitalStockLibreUsdt.toFixed(2)} USDT)</span></span>
+                  </div>
+
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                     <div className="p-7 rounded-3xl border-t-4 border-t-red-600 border border-[#2b0d0d] bg-gradient-to-b from-[#140a0a] to-[#0a0505] shadow-2xl relative overflow-hidden">
-                      <h3 className="text-neutral-400 text-xs uppercase tracking-widest font-extrabold mb-3">Ventas + Ingresos (S/)</h3>
+                      <h3 className="text-neutral-400 text-xs uppercase tracking-widest font-extrabold mb-3">Ventas + Ingresos Extras</h3>
                       <p className="text-4xl font-black text-white">S/ {ingresosTotalesSoles.toFixed(2)}</p>
                       <div className="mt-3 pt-3 border-t border-red-900/30 flex justify-between text-xs font-bold text-neutral-400">
                         <span>Cuentas Vendidas: S/ {ingresosSoles.toFixed(2)}</span>
@@ -692,15 +716,15 @@ export default function App() {
                       </div>
                     </div>
                     <div className="p-7 rounded-3xl border-t-4 border-t-[#6b1414] border border-[#2b0d0d] bg-gradient-to-b from-[#140a0a] to-[#0a0505] shadow-2xl relative overflow-hidden">
-                      <h3 className="text-neutral-400 text-xs uppercase tracking-widest font-extrabold mb-3">Egresos Totales (S/)</h3>
-                      <p className="text-4xl font-black text-red-500">S/ {egresosTotalesSoles.toFixed(2)}</p>
+                      <h3 className="text-neutral-400 text-xs uppercase tracking-widest font-extrabold mb-3">Costo de lo Vendido + Gastos</h3>
+                      <p className="text-4xl font-black text-red-500">S/ {egresosVentasSoles.toFixed(2)}</p>
                       <div className="mt-3 pt-3 border-t border-red-900/30 flex justify-between text-xs font-bold text-red-900/60">
-                        <span>Stock (USDTxTC): S/ {(egresosUsdt * numTc).toFixed(2)}</span>
+                        <span>Costo Ventas: S/ {(costoStockVendidoUsdt * numTc).toFixed(2)}</span>
                         <span>Gastos: S/ {cajaEgresos.toFixed(2)}</span>
                       </div>
                     </div>
                     <div className="p-7 rounded-3xl border-t-4 border-t-neutral-400 border border-[#2b0d0d] bg-gradient-to-b from-[#140a0a] to-[#0a0505] shadow-2xl relative overflow-hidden">
-                      <h3 className="text-neutral-400 text-xs uppercase tracking-widest font-extrabold mb-3">Ganancia Neta (S/)</h3>
+                      <h3 className="text-neutral-400 text-xs uppercase tracking-widest font-extrabold mb-3">Ganancia Neta de Ventas</h3>
                       <p className="text-4xl font-black text-neutral-100">S/ {gananciaNeta.toFixed(2)}</p>
                     </div>
                   </div>
@@ -777,30 +801,31 @@ export default function App() {
                 </div>
               )}
 
+              {/* VISTA VENTAS (AHORA LIMITADA Y ESTRICTA) */}
               {vista === 'ventas' && (
                 <div className="space-y-6 animate-fade-in">
                   <div className="flex justify-between items-center">
-                    <h2 className="text-lg font-bold text-white">Cuentas Listas para Entregar</h2>
+                    <h2 className="text-lg font-bold text-white">Siguientes 12 Cuentas Libres</h2>
                     <button onClick={cargarDatos} className="bg-[#141414] hover:bg-neutral-800 text-neutral-300 px-4 py-2.5 rounded-2xl text-sm transition border border-neutral-800 flex items-center gap-2 shadow-sm font-semibold"><RefreshCw className="w-4 h-4" /> Actualizar</button>
                   </div>
 
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                    {inventario.filter((i) => i.estado === 'Disponible').length === 0 ? (
+                    {cuentasLibres.length === 0 ? (
                       <div className="col-span-full text-center py-16 text-neutral-400 p-8 rounded-3xl border border-[#2b0d0d] bg-[#0d0d0d]">No hay stock disponible.</div>
                     ) : (
-                      inventario.filter((i) => i.estado === 'Disponible').map((acc, idx) => {
+                      cuentasLibres.slice(0, 12).map((acc) => {
                         const hoy = new Date();
                         if (hoy.getHours() >= 20) hoy.setDate(hoy.getDate() + 1);
                         hoy.setMonth(hoy.getMonth() + 1);
                         const meses = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
                         const fechaF = ('0' + hoy.getDate()).slice(-2) + meses[hoy.getMonth()];
-                        const textoWP = `CCARG#N${idx + 1}( ${fechaF})\n${acc.correo}\n🔑 889900\nBOT TELEGRAM`;
+                        const textoWP = `CCARG#N${acc.id}( ${fechaF})\n${acc.correo}\n🔑 889900\nBOT TELEGRAM`;
 
                         return (
                           <div key={acc.id} className="p-6 rounded-3xl border border-[#2b0d0d] bg-gradient-to-b from-[#120707] to-[#080303] flex flex-col justify-between space-y-5 shadow-2xl">
                             <pre className="text-xs font-mono text-neutral-200 bg-[#050505] p-4 rounded-2xl whitespace-pre-wrap border border-neutral-900 shadow-inner">{textoWP}</pre>
                             <div className="flex justify-between items-center pt-3 border-t border-neutral-950">
-                              <span className="text-xs font-extrabold text-red-500 bg-red-950/40 px-3 py-1.5 rounded-xl border border-red-900/40">Stock #{idx + 1}</span>
+                              <span className="text-xs font-extrabold text-red-500 bg-red-950/40 px-3 py-1.5 rounded-xl border border-red-900/40">ID Stock #{acc.id}</span>
                               <button onClick={() => { navigator.clipboard.writeText(textoWP); setCopiadoIdx(acc.id); setTimeout(() => setCopiadoIdx(null), 1500); mostrarNotificacion('Copiado al portapapeles', 'success')}} className={`text-white text-xs px-5 py-2.5 rounded-xl font-bold transition flex items-center gap-2 shadow-lg ${copiadoIdx === acc.id ? 'bg-neutral-800' : 'bg-gradient-to-r from-[#800f11] to-red-600 hover:from-red-700 hover:to-red-500 shadow-red-950'}`}>
                                 {copiadoIdx === acc.id ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
                                 {copiadoIdx === acc.id ? 'Copiado' : 'Copiar'}
@@ -821,7 +846,7 @@ export default function App() {
                       <Search className="absolute left-3.5 top-3 w-4 h-4 text-neutral-500" />
                       <input type="text" value={busquedaInv} onChange={(e) => setBusquedaInv(e.target.value)} placeholder="Buscar correo o proveedor..." className="w-full pl-11 pr-4 py-2.5 bg-[#050505] border border-neutral-800 rounded-xl text-sm text-neutral-100 outline-none focus:ring-2 focus:ring-red-600 shadow-inner" />
                     </div>
-                    <div className="flex items-center gap-3 w-full md:w-auto justify-end">
+                    <div className="flex flex-wrap items-center gap-3 w-full md:w-auto justify-end">
                       <button onClick={limpiarDuplicados} className="bg-red-950 hover:bg-red-900 text-red-400 px-4 py-2.5 rounded-xl text-sm font-semibold transition border border-red-900/50 flex items-center gap-2 shadow-sm">
                         <Trash2 className="w-4 h-4" /> Limpiar Duplicados
                       </button>
@@ -856,8 +881,13 @@ export default function App() {
                               <td className="px-6 py-4 text-neutral-300 font-mono">S/{item.precio_venta}</td>
                               <td className="px-6 py-4"><span className={`px-3 py-1 rounded-full text-xs font-bold ${item.estado === 'Disponible' ? 'bg-red-500/10 text-red-500 border border-red-500/20' : 'bg-neutral-800 text-neutral-400 border border-neutral-700'}`}>{item.estado}</span></td>
                               <td className="px-6 py-4 text-neutral-400">{item.cliente_asignado || '-'}</td>
-                              <td className="px-6 py-4 text-center">
-                                <button onClick={() => eliminarCuentaInv(item.id, item.correo)} className="p-2.5 bg-red-950/40 hover:bg-red-900/40 text-red-400 rounded-xl transition border border-red-900/30 shadow-sm"><Trash2 className="w-4 h-4" /></button>
+                              <td className="px-6 py-4 text-center flex items-center justify-center gap-2">
+                                {item.estado === 'Disponible' && (
+                                  <button onClick={() => abrirModalAsignarDesdeInventario(item.correo)} className="p-2.5 bg-red-900/40 hover:bg-red-600/40 text-red-300 rounded-xl transition border border-red-900/30 shadow-sm" title="Asignar Cliente">
+                                    <UserPlus className="w-4 h-4" />
+                                  </button>
+                                )}
+                                <button onClick={() => eliminarCuentaInv(item.id, item.correo)} className="p-2.5 bg-red-950/40 hover:bg-red-900/40 text-red-400 rounded-xl transition border border-red-900/30 shadow-sm" title="Eliminar"><Trash2 className="w-4 h-4" /></button>
                               </td>
                             </tr>
                           ))
