@@ -47,7 +47,6 @@ export default function App() {
     localStorage.setItem('tc_aluria', tc);
   }, [tc]);
 
-  // Autenticación Supabase Auth
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
@@ -62,7 +61,6 @@ export default function App() {
     return () => subscription.unsubscribe();
   }, []);
 
-  // Sincronización y Realtime
   useEffect(() => {
     if (!session) return;
     cargarDatos();
@@ -95,7 +93,6 @@ export default function App() {
     }
   }
 
-  // --- LOGIN ---
   async function handleLogin(e) {
     e.preventDefault();
     setAuthLoading(true);
@@ -116,7 +113,6 @@ export default function App() {
     await supabase.auth.signOut();
   }
 
-  // --- EXPORTAR A CSV ---
   function exportarACSV(data, filename) {
     if (!data || data.length === 0) return alert('No hay datos para exportar.');
     const keys = Object.keys(data[0]);
@@ -135,30 +131,25 @@ export default function App() {
     document.body.removeChild(link);
   }
 
-  // Modales
   const [modalInv, setModalInv] = useState(false);
   const [modalCli, setModalCli] = useState(false);
   const [modalCaja, setModalCaja] = useState(false);
 
-  // Filtros de búsqueda
   const [busquedaInv, setBusquedaInv] = useState('');
   const [busquedaCli, setBusquedaCli] = useState('');
   const [busquedaGestion, setBusquedaGestion] = useState('');
   const [modoResumen, setModoResumen] = useState(false);
 
-  // Estados para Importar Inventario Lote
   const [loteProv, setLoteProv] = useState('');
   const [loteCosto, setLoteCosto] = useState('');
   const [lotePrecio, setLotePrecio] = useState('');
   const [loteCorreos, setLoteCorreos] = useState('');
 
-  // Estados para Control de Gastos
   const [gastoCategoria, setGastoCategoria] = useState('Comida');
   const [gastoConcepto, setGastoConcepto] = useState('');
   const [gastoMonto, setGastoMonto] = useState('');
   const [gastoTipo, setGastoTipo] = useState('Egreso');
 
-  // Estados para Nuevo Cliente / Asignación
   const [cliNom, setCliNom] = useState('');
   const [cliNum, setCliNum] = useState('');
   const [cliCuentaAsignada, setCliCuentaAsignada] = useState('');
@@ -168,7 +159,6 @@ export default function App() {
 
   const [copiadoIdx, setCopiadoIdx] = useState(null);
 
-  // --- ACCIÓN COBRANZA ---
   async function renovarCobranza(cliente) {
     try {
       const arr = cliente.fin ? cliente.fin.split('-') : [];
@@ -191,7 +181,6 @@ export default function App() {
     }
   }
 
-  // --- ACCIÓN GESTIÓN DE CUENTAS ---
   async function marcarPagadoProveedor(id) {
     try {
       const { error } = await supabase
@@ -221,7 +210,6 @@ export default function App() {
     }
   }
 
-  // --- IMPORTAR LOTE INVENTARIO ---
   async function procesarPegaInventario(e) {
     e.preventDefault();
     const lineas = loteCorreos
@@ -267,7 +255,6 @@ export default function App() {
     setModalInv(false);
   }
 
-  // --- ASIGNAR CLIENTE ---
   async function guardarClienteNuevo(e) {
     e.preventDefault();
     const itemLibre = inventario.find(
@@ -305,7 +292,6 @@ export default function App() {
     }
   }
 
-  // --- CONTROL DE GASTOS ---
   async function guardarTransaccion(e) {
     e.preventDefault();
     try {
@@ -346,7 +332,6 @@ export default function App() {
     }
   }
 
-  // --- LOGIN ---
   if (!session) {
     return (
       <div className="flex h-screen items-center justify-center bg-[#050505] text-white">
@@ -409,7 +394,6 @@ export default function App() {
     );
   }
 
-  // --- CÁLCULOS FINANCIEROS Y FILTROS ---
   const libres = inventario.filter((i) => i.estado === 'Disponible').length;
   const numTc = parseFloat(tc) || 3.42;
 
@@ -471,10 +455,10 @@ export default function App() {
   );
 
   return (
-    <div className="flex h-screen overflow-hidden bg-[#050505] text-neutral-100 font-sans relative">
+    <div className="flex h-screen overflow-hidden bg-[#050505] text-neutral-100 font-sans relative w-full">
       
-      {/* 💻 MENÚ LATERAL (Solo visible en Computadoras / Tablets grandes: md:flex) */}
-      <aside className="hidden md:flex w-72 border-r border-[#260505] bg-[#0a0a0a] flex-col justify-between shadow-2xl z-20">
+      {/* 💻 MENÚ LATERAL (Oculto en celulares, visible solo en computadoras: hidden md:flex) */}
+      <aside className="hidden md:flex w-72 border-r border-[#260505] bg-[#0a0a0a] flex-col justify-between shadow-2xl z-20 shrink-0">
         <div>
           <div className="p-6 border-b border-[#260505] flex items-center gap-3 bg-gradient-to-r from-[#140202] to-transparent">
             <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-[#800f11] to-red-600 flex items-center justify-center text-white shadow-lg shadow-red-950">
@@ -544,7 +528,7 @@ export default function App() {
         </div>
       </aside>
 
-      {/* 📱 BARRA DE NAVEGACIÓN INFERIOR (Solo visible en Celulares: md:hidden) */}
+      {/* 📱 BARRA INFERIOR MÓVIL (Solo visible en celulares: md:hidden) */}
       <nav className="md:hidden fixed bottom-0 inset-x-0 bg-[#0a0a0a] border-t border-[#260505] flex justify-around items-center py-2 px-1 z-40 shadow-2xl">
         <BotonMobile icono={<LayoutDashboard className="w-5 h-5" />} texto="Dash" vista="dashboard" vistaActual={vista} setVista={setVista} />
         <BotonMobile icono={<Zap className="w-5 h-5 text-red-500" />} texto="Ventas" vista="ventas" vistaActual={vista} setVista={setVista} />
@@ -554,11 +538,10 @@ export default function App() {
         <BotonMobile icono={<PieChart className="w-5 h-5 text-amber-500" />} texto="Gastos" vista="gastos" vistaActual={vista} setVista={setVista} />
       </nav>
 
-      {/* CONTENIDO PRINCIPAL (Ocupa 100% de la pantalla operativa en el celular) */}
-      <main className="flex-1 flex flex-col h-screen overflow-y-auto bg-transparent relative pb-20 md:pb-0">
+      {/* CONTENIDO PRINCIPAL */}
+      <main className="flex-1 flex flex-col h-screen overflow-y-auto bg-transparent relative pb-20 md:pb-0 w-full">
         <header className="sticky top-0 z-10 px-6 py-4 flex justify-between items-center border-b border-[#260505] bg-[#0a0a0a]/90 backdrop-blur-2xl shadow-sm">
           <div className="flex items-center gap-3">
-            {/* Botón de cerrar sesión rápido arriba a la izquierda solo en móvil */}
             <button 
               onClick={handleLogout}
               className="md:hidden p-2 rounded-xl bg-red-950/50 text-red-400 border border-red-900/40"
@@ -599,7 +582,6 @@ export default function App() {
             </div>
           ) : (
             <>
-              {/* VISTA DASHBOARD */}
               {vista === 'dashboard' && (
                 <div className="space-y-8 animate-fade-in">
                   <div className="flex flex-wrap justify-between items-center gap-4">
@@ -651,7 +633,6 @@ export default function App() {
                     </div>
                   </div>
 
-                  {/* COBRANZA */}
                   <div className="p-7 rounded-3xl border border-[#3b0909] bg-gradient-to-r from-[#140a0a] via-[#0d0707] to-[#080404] space-y-5 shadow-2xl">
                     <h3 className="text-lg font-extrabold text-white flex items-center gap-2.5">
                       <AlertCircle className="w-6 h-6 text-red-500" /> Cobranza
@@ -702,7 +683,6 @@ export default function App() {
                     )}
                   </div>
 
-                  {/* Deudas y Vencimientos */}
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <div className="p-7 rounded-3xl border border-[#2b0d0d] bg-[#0d0d0d] space-y-4 shadow-xl">
                       <h3 className="text-base font-extrabold text-red-500 flex items-center gap-2">
@@ -781,7 +761,6 @@ export default function App() {
                 </div>
               )}
 
-              {/* VISTA VENTAS RÁPIDAS */}
               {vista === 'ventas' && (
                 <div className="space-y-6 animate-fade-in">
                   <div className="flex justify-between items-center">
@@ -871,7 +850,6 @@ export default function App() {
                 </div>
               )}
 
-              {/* VISTA INVENTARIO */}
               {vista === 'inventario' && (
                 <div className="rounded-3xl overflow-hidden animate-fade-in border border-[#2b0d0d] bg-[#0d0d0d] shadow-2xl">
                   <div className="p-5 border-b border-[#2b0d0d] flex flex-col md:flex-row justify-between items-center bg-[#140a0a] gap-4">
@@ -977,7 +955,6 @@ export default function App() {
                 </div>
               )}
 
-              {/* VISTA CLIENTES */}
               {vista === 'clientes' && (
                 <div className="rounded-3xl overflow-hidden animate-fade-in border border-[#2b0d0d] bg-[#0d0d0d] shadow-2xl">
                   <div className="p-5 border-b border-[#2b0d0d] flex flex-col md:flex-row justify-between items-center bg-[#140a0a] gap-4">
@@ -1176,7 +1153,6 @@ export default function App() {
                 </div>
               )}
 
-              {/* VISTA GESTIÓN DE CUENTAS */}
               {vista === 'gestion' && (
                 <div className="rounded-3xl overflow-hidden animate-fade-in border border-[#2b0d0d] bg-[#0d0d0d] shadow-2xl">
                   <div className="p-5 border-b border-[#2b0d0d] flex flex-wrap justify-between items-center bg-[#140a0a] gap-4">
@@ -1276,7 +1252,6 @@ export default function App() {
                 </div>
               )}
 
-              {/* VISTA CONTROL DE GASTOS */}
               {vista === 'gastos' && (
                 <div className="space-y-8 animate-fade-in">
                   <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
@@ -1393,7 +1368,6 @@ export default function App() {
         </div>
       </main>
 
-      {/* MODAL IMPORTAR INVENTARIO (LOTE) */}
       {modalInv && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-50 flex justify-center items-center p-4">
           <div className="bg-[#0d0d0d] border border-[#3b0909] rounded-3xl w-full max-w-lg p-8 space-y-6 shadow-2xl shadow-red-950">
@@ -1485,7 +1459,6 @@ export default function App() {
         </div>
       )}
 
-      {/* MODAL ASIGNAR CLIENTE */}
       {modalCli && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-50 flex justify-center items-center p-4">
           <div className="bg-[#0d0d0d] border border-[#3b0909] rounded-3xl w-full max-w-md p-8 space-y-5 shadow-2xl shadow-red-950">
@@ -1606,7 +1579,6 @@ export default function App() {
         </div>
       )}
 
-      {/* MODAL CONTROL DE GASTOS */}
       {modalCaja && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-50 flex justify-center items-center p-4">
           <div className="bg-[#0d0d0d] border border-[#3b0909] rounded-3xl w-full max-w-md p-8 space-y-5 shadow-2xl shadow-red-950">
@@ -1700,7 +1672,6 @@ export default function App() {
   );
 }
 
-// Componente para botones del menú en Computadora
 function BotonesMenu({ icono, texto, vista, vistaActual, setVista }) {
   const activo = vistaActual === vista;
   return (
@@ -1718,7 +1689,6 @@ function BotonesMenu({ icono, texto, vista, vistaActual, setVista }) {
   );
 }
 
-// Componente para los botones de la barra inferior en Celulares
 function BotonMobile({ icono, texto, vista, vistaActual, setVista }) {
   const activo = vistaActual === vista;
   return (
