@@ -162,7 +162,7 @@ export default function App() {
   const [modalInv, setModalInv] = useState(false);
   const [modalCli, setModalCli] = useState(false);
   const [modalCaja, setModalCaja] = useState(false);
-  const [modalReemplazo, setModalReemplazo] = useState(false); // NUEVO MODAL
+  const [modalReemplazo, setModalReemplazo] = useState(false);
 
   const [busquedaInv, setBusquedaInv] = useState('');
   const [busquedaCli, setBusquedaCli] = useState('');
@@ -174,7 +174,7 @@ export default function App() {
   const [lotePrecio, setLotePrecio] = useState('');
   const [loteCorreos, setLoteCorreos] = useState('');
   
-  const [textoReemplazo, setTextoReemplazo] = useState(''); // NUEVO ESTADO PARA REEMPLAZOS
+  const [textoReemplazo, setTextoReemplazo] = useState('');
 
   const [gastoCategoria, setGastoCategoria] = useState('Comida');
   const [gastoConcepto, setGastoConcepto] = useState('');
@@ -249,15 +249,14 @@ export default function App() {
     }
   }
 
-  // --- NUEVA FUNCIÓN: REEMPLAZO INTELIGENTE DE CAÍDAS ---
+  // --- REEMPLAZO INTELIGENTE DE CAÍDAS ---
   async function procesarReemplazos(e) {
     e.preventDefault();
     
-    // Extraemos TODOS los correos del texto pegado (sin importar las palabras o emojis extra)
+    // Extrae todos los correos automáticamente sin importar emoticonos o saltos de línea
     const regexCorreos = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
     const correosEncontrados = textoReemplazo.match(regexCorreos) || [];
 
-    // Verificamos que sea un número par (1 antiguo y 1 nuevo, 2 antiguos y 2 nuevos, etc.)
     if (correosEncontrados.length === 0 || correosEncontrados.length % 2 !== 0) {
       return mostrarNotificacion('Error: El formato debe contener pares exactos de correos (Antiguo y Nuevo).', 'error');
     }
@@ -267,19 +266,15 @@ export default function App() {
       let reemplazados = 0;
       let noEncontrados = 0;
 
-      // Iteramos de 2 en 2 (índice 0=Viejo, índice 1=Nuevo)
       for (let i = 0; i < correosEncontrados.length; i += 2) {
         const cAntiguo = correosEncontrados[i].toLowerCase().trim();
         const cNuevo = correosEncontrados[i + 1].toLowerCase().trim();
 
-        // 1. Buscamos el correo antiguo en el inventario
         const itemInv = inventario.find(inv => (inv.correo || '').toLowerCase().trim() === cAntiguo);
 
         if (itemInv) {
-          // 2. Actualizamos el correo en el inventario (mantiene proveedor y costo)
           await supabase.from('inventario').update({ correo: cNuevo }).eq('id', itemInv.id);
 
-          // 3. Si estaba asignado a un cliente, le actualizamos su ficha también
           if (itemInv.estado === 'Asignada') {
             const cliMatch = clientes.find(c => (c.cuenta || '').toLowerCase().includes(cAntiguo));
             if (cliMatch) {
@@ -303,7 +298,6 @@ export default function App() {
       setCargando(false);
     }
   }
-
 
   // --- LIMPIEZA DE DUPLICADOS ---
   async function limpiarDuplicados() {
@@ -431,6 +425,7 @@ export default function App() {
     }
   }
 
+  // --- ABRIR MODAL DESDE INVENTARIO ---
   function abrirModalAsignarDesdeInventario(correo) {
     setCliCuentaAsignada(correo);
     setCliNom('');
@@ -438,6 +433,7 @@ export default function App() {
     setModalCli(true);
   }
 
+  // --- ASIGNACIÓN MULTIPLE INTELIGENTE ---
   async function guardarClienteNuevo(e) {
     e.preventDefault();
 
@@ -871,10 +867,11 @@ export default function App() {
                 </div>
               )}
 
+              {/* VISTA VENTAS: MOSTRAR TODAS LAS CUENTAS SIN RESTRICCIÓN DE CANTIDAD */}
               {vista === 'ventas' && (
                 <div className="space-y-6 animate-fade-in">
                   <div className="flex justify-between items-center">
-                    <h2 className="text-lg font-bold text-white">Siguientes 12 Cuentas Libres</h2>
+                    <h2 className="text-lg font-bold text-white">Cuentas Listas para Entregar ({cuentasLibres.length})</h2>
                     <button onClick={cargarDatos} className="bg-[#141414] hover:bg-neutral-800 text-neutral-300 px-4 py-2.5 rounded-2xl text-sm transition border border-neutral-800 flex items-center gap-2 shadow-sm font-semibold"><RefreshCw className="w-4 h-4" /> Actualizar</button>
                   </div>
 
@@ -882,7 +879,7 @@ export default function App() {
                     {cuentasLibres.length === 0 ? (
                       <div className="col-span-full text-center py-16 text-neutral-400 p-8 rounded-3xl border border-[#2b0d0d] bg-[#0d0d0d]">No hay stock disponible.</div>
                     ) : (
-                      cuentasLibres.slice(0, 12).map((acc) => {
+                      cuentasLibres.map((acc) => {
                         const hoy = new Date();
                         if (hoy.getHours() >= 20) hoy.setDate(hoy.getDate() + 1);
                         hoy.setMonth(hoy.getMonth() + 1);
@@ -916,7 +913,6 @@ export default function App() {
                       <input type="text" value={busquedaInv} onChange={(e) => setBusquedaInv(e.target.value)} placeholder="Buscar correo o proveedor..." className="w-full pl-11 pr-4 py-2.5 bg-[#050505] border border-neutral-800 rounded-xl text-sm text-neutral-100 outline-none focus:ring-2 focus:ring-red-600 shadow-inner" />
                     </div>
                     <div className="flex flex-wrap items-center gap-3 w-full md:w-auto justify-end">
-                      {/* BOTÓN NUEVO: REEMPLAZOS DE CAÍDAS */}
                       <button onClick={() => setModalReemplazo(true)} className="bg-gradient-to-r from-purple-900 to-red-900 hover:from-purple-800 hover:to-red-800 text-white px-4 py-2.5 rounded-xl text-sm font-bold transition border border-red-800/50 flex items-center gap-2 shadow-sm">
                         <RefreshCw className="w-4 h-4" /> Reemplazar Caídas
                       </button>
@@ -1206,7 +1202,7 @@ export default function App() {
                   required 
                   value={textoReemplazo} 
                   onChange={(e) => setTextoReemplazo(e.target.value)} 
-                  placeholder="Ejemplo:&#10;🔁 Correo antiguo: falcon@gmail.com&#10;➡️ Correo nuevo: nuevo@gmail.com" 
+                  placeholder="Ejemplo:&#10;📨 ANTERIOR&#10;viejo@gmail.com&#10;&#10;➡️ NUEVO&#10;nuevo@gmail.com" 
                   className="w-full bg-[#050505] border border-neutral-800 rounded-xl p-3 text-sm text-white outline-none font-mono resize-none focus:ring-2 focus:ring-red-600 shadow-inner"
                 ></textarea>
               </div>
@@ -1229,6 +1225,7 @@ export default function App() {
               <button onClick={() => setModalCli(false)} className="text-neutral-400 hover:text-white"><X className="w-6 h-6" /></button>
             </div>
             
+            {/* SELECTOR DE CLIENTES EXISTENTES */}
             <div className="bg-[#140a0a] p-4 rounded-xl border border-red-900/30 mb-2">
               <label className="text-xs font-bold uppercase tracking-wider text-red-400 mb-1.5 block">¿Es un cliente registrado?</label>
               <select 
