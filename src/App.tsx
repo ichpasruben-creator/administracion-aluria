@@ -96,7 +96,7 @@ export default function App() {
     };
   }, [session]);
 
-  // --- CARGA DE DATOS CON ALERTA DE ERRORES ---
+  // --- CARGA DE DATOS ---
   async function cargarDatos() {
     try {
       setCargando(true);
@@ -167,10 +167,56 @@ export default function App() {
     document.body.removeChild(link);
   }
 
+  // =====================================================================
+  // 🔥 NUEVA MEMORIA INMORTAL (AUTO-GUARDADO ANTI REFRESH) 🔥
+  // =====================================================================
+  
+  const [modalCli, setModalCli] = useState(() => localStorage.getItem('alu_modalCli') === 'true');
+  const [cliNom, setCliNom] = useState(() => localStorage.getItem('alu_cliNom') || '');
+  const [cliNum, setCliNum] = useState(() => localStorage.getItem('alu_cliNum') || '');
+  const [cliCuentaAsignada, setCliCuentaAsignada] = useState(() => localStorage.getItem('alu_cliCuentas') || '');
+  const [cliInicio, setCliInicio] = useState(() => localStorage.getItem('alu_cliInicio') || '');
+  const [cliFin, setCliFin] = useState(() => localStorage.getItem('alu_cliFin') || '');
+  const [cliPago, setCliPago] = useState(() => localStorage.getItem('alu_cliPago') || 'Pagado');
+
+  const [modalReemplazo, setModalReemplazo] = useState(() => localStorage.getItem('alu_modalReemplazo') === 'true');
+  const [textoReemplazo, setTextoReemplazo] = useState(() => localStorage.getItem('alu_textoReemplazo') || '');
+
+  // Guardar en el navegador instantáneamente cada vez que algo cambia
+  useEffect(() => {
+    localStorage.setItem('alu_modalCli', modalCli);
+    localStorage.setItem('alu_cliNom', cliNom);
+    localStorage.setItem('alu_cliNum', cliNum);
+    localStorage.setItem('alu_cliCuentas', cliCuentaAsignada);
+    localStorage.setItem('alu_cliInicio', cliInicio);
+    localStorage.setItem('alu_cliFin', cliFin);
+    localStorage.setItem('alu_cliPago', cliPago);
+  }, [modalCli, cliNom, cliNum, cliCuentaAsignada, cliInicio, cliFin, cliPago]);
+
+  useEffect(() => {
+    localStorage.setItem('alu_modalReemplazo', modalReemplazo);
+    localStorage.setItem('alu_textoReemplazo', textoReemplazo);
+  }, [modalReemplazo, textoReemplazo]);
+
+  // Funciones para limpiar la memoria solo cuando cancelamos o guardamos con éxito
+  function cerrarModalCli() {
+    setModalCli(false);
+    setCliNom('');
+    setCliNum('');
+    setCliCuentaAsignada('');
+    setCliInicio('');
+    setCliFin('');
+    setCliPago('Pagado');
+  }
+
+  function cerrarModalReemplazo() {
+    setModalReemplazo(false);
+    setTextoReemplazo('');
+  }
+  // =====================================================================
+
   const [modalInv, setModalInv] = useState(false);
-  const [modalCli, setModalCli] = useState(false);
   const [modalCaja, setModalCaja] = useState(false);
-  const [modalReemplazo, setModalReemplazo] = useState(false);
 
   const [busquedaInv, setBusquedaInv] = useState('');
   const [busquedaCli, setBusquedaCli] = useState('');
@@ -181,20 +227,11 @@ export default function App() {
   const [loteCosto, setLoteCosto] = useState('');
   const [lotePrecio, setLotePrecio] = useState('');
   const [loteCorreos, setLoteCorreos] = useState('');
-  
-  const [textoReemplazo, setTextoReemplazo] = useState('');
 
   const [gastoCategoria, setGastoCategoria] = useState('Comida');
   const [gastoConcepto, setGastoConcepto] = useState('');
   const [gastoMonto, setGastoMonto] = useState('');
   const [gastoTipo, setGastoTipo] = useState('Egreso');
-
-  const [cliNom, setCliNom] = useState('');
-  const [cliNum, setCliNum] = useState('');
-  const [cliCuentaAsignada, setCliCuentaAsignada] = useState('');
-  const [cliInicio, setCliInicio] = useState('');
-  const [cliFin, setCliFin] = useState('');
-  const [cliPago, setCliPago] = useState('Pagado');
 
   const [copiadoIdx, setCopiadoIdx] = useState(null);
 
@@ -228,13 +265,11 @@ export default function App() {
 
   async function renovarCobranzaGrupo(cuentas) {
     try {
-      const idsActualizados = [];
       for (let c of cuentas) {
         const arr = c.fin ? c.fin.split('-') : [];
         let d = arr.length === 3 ? new Date(arr[0], arr[1] - 1, arr[2]) : new Date();
         d.setDate(d.getDate() + 30);
         const nuevaFecha = d.toISOString().split('T')[0];
-        idsActualizados.push({ id: c.id, fin: nuevaFecha, pago: 'Pagado' });
         
         await supabase.from('clientes').update({ fin: nuevaFecha, pago: 'Pagado' }).eq('id', c.id);
       }
@@ -296,8 +331,7 @@ export default function App() {
       }
 
       mostrarNotificacion(`✅ ${reemplazados} reemplazos listos. ${noEncontrados > 0 ? `⚠️ ${noEncontrados} no encontrados en sistema.` : ''}`, 'success');
-      setModalReemplazo(false);
-      setTextoReemplazo('');
+      cerrarModalReemplazo(); // Cierra y limpia la memoria del modal
       cargarDatos();
     } catch (error) {
       mostrarNotificacion('Error al procesar reemplazos: ' + error.message, 'error');
@@ -432,11 +466,8 @@ export default function App() {
     }
   }
 
-  // --- ABRIR MODAL DESDE INVENTARIO ---
   function abrirModalAsignarDesdeInventario(correo) {
     setCliCuentaAsignada(correo);
-    setCliNom('');
-    setCliNum('');
     setModalCli(true);
   }
 
@@ -492,13 +523,9 @@ export default function App() {
       const { error: cliError } = await supabase.from('clientes').insert(nuevosClientes);
       if (cliError) throw cliError;
 
-      setModalCli(false);
+      cerrarModalCli(); // Cierra y limpia la memoria
       mostrarNotificacion(`¡${itemsAAsignar.length} cuentas asignadas exitosamente a ${cliNom}!`, 'success');
       cargarDatos();
-      
-      setCliNom('');
-      setCliNum('');
-      setCliCuentaAsignada('');
     } catch (error) {
       mostrarNotificacion('Error al guardar asignaciones: ' + error.message, 'error');
     }
@@ -774,7 +801,6 @@ export default function App() {
                     </button>
                   </div>
 
-                  {/* TARJETA DE CAPITAL INVERTIDO */}
                   <div className="p-4 rounded-2xl bg-neutral-900/40 border border-neutral-800/60 flex flex-col md:flex-row justify-between items-start md:items-center text-sm font-semibold text-neutral-300 shadow-inner gap-2">
                     <span className="flex items-center gap-2 text-amber-500/80"><Package className="w-5 h-5"/> Capital Invertido en Cuentas Libres (Por Vender):</span>
                     <span className="text-white font-mono font-bold text-lg">S/ {capitalLibreSoles.toFixed(2)} <span className="text-neutral-500 text-xs font-normal">({capitalStockLibreUsdt.toFixed(2)} USDT)</span></span>
@@ -875,7 +901,7 @@ export default function App() {
                 </div>
               )}
 
-              {/* VISTA VENTAS: MOSTRAR TODAS LAS CUENTAS SIN RESTRICCIÓN DE CANTIDAD */}
+              {/* VISTA VENTAS */}
               {vista === 'ventas' && (
                 <div className="space-y-6 animate-fade-in">
                   <div className="flex justify-between items-center">
@@ -1193,7 +1219,7 @@ export default function App() {
               <h3 className="text-xl font-extrabold text-white flex items-center gap-2">
                 <RefreshCw className="w-6 h-6 text-red-500" /> Reemplazo de Caídas
               </h3>
-              <button onClick={() => setModalReemplazo(false)} className="text-neutral-400 hover:text-white"><X className="w-6 h-6" /></button>
+              <button onClick={cerrarModalReemplazo} className="text-neutral-400 hover:text-white"><X className="w-6 h-6" /></button>
             </div>
             
             <p className="text-sm text-neutral-400 leading-relaxed">
@@ -1216,7 +1242,7 @@ export default function App() {
               </div>
 
               <div className="flex justify-end gap-3 pt-4 border-t border-[#2b0d0d]">
-                <button type="button" onClick={() => setModalReemplazo(false)} className="px-5 py-2.5 text-neutral-400 hover:text-white text-sm font-bold">Cancelar</button>
+                <button type="button" onClick={cerrarModalReemplazo} className="px-5 py-2.5 text-neutral-400 hover:text-white text-sm font-bold">Cancelar</button>
                 <button type="submit" className="px-6 py-2.5 bg-gradient-to-r from-purple-900 to-red-800 hover:from-purple-800 hover:to-red-700 text-white rounded-xl text-sm font-bold shadow-lg shadow-red-950">Ejecutar Reemplazo</button>
               </div>
             </form>
@@ -1230,7 +1256,7 @@ export default function App() {
           <div className="bg-[#0d0d0d] border border-[#3b0909] rounded-3xl w-full max-w-md p-8 space-y-5 shadow-2xl shadow-red-950">
             <div className="flex justify-between items-center border-b border-[#2b0d0d] pb-4">
               <h3 className="text-xl font-extrabold text-white">Asignar Cliente</h3>
-              <button onClick={() => setModalCli(false)} className="text-neutral-400 hover:text-white"><X className="w-6 h-6" /></button>
+              <button onClick={cerrarModalCli} className="text-neutral-400 hover:text-white"><X className="w-6 h-6" /></button>
             </div>
             
             {/* SELECTOR DE CLIENTES EXISTENTES */}
@@ -1301,7 +1327,7 @@ export default function App() {
                 </select>
               </div>
               <div className="flex justify-end gap-3 pt-4 border-t border-[#2b0d0d]">
-                <button type="button" onClick={() => setModalCli(false)} className="px-5 py-2.5 text-neutral-400 hover:text-white text-sm font-bold">Cancelar</button>
+                <button type="button" onClick={cerrarModalCli} className="px-5 py-2.5 text-neutral-400 hover:text-white text-sm font-bold">Cancelar</button>
                 <button type="submit" className="px-6 py-2.5 bg-gradient-to-r from-[#800f11] to-red-600 hover:from-red-700 hover:to-red-500 text-white rounded-xl text-sm font-bold shadow-lg shadow-red-950">Guardar Asignaciones</button>
               </div>
             </form>
