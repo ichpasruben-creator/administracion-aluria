@@ -82,12 +82,14 @@ export default function App() {
 
   useEffect(() => {
     if (!session) return;
-    cargarDatos();
+    
+    // --- ACTUALIZACIÓN SILENCIOSA DE INICIO ---
+    cargarDatos(true); 
 
     const channel = supabase
       .channel('schema-db-changes')
       .on('postgres_changes', { event: '*', schema: 'public' }, () => {
-        cargarDatos();
+        cargarDatos(true); // Se actualiza en silencio cuando hay cambios
       })
       .subscribe();
 
@@ -96,10 +98,14 @@ export default function App() {
     };
   }, [session]);
 
-  // --- CARGA DE DATOS ---
-  async function cargarDatos() {
+  // =====================================================================
+  // 🔥 ACTUALIZACIÓN SILENCIOSA (ANTI-BLOQUEOS DE PANTALLA) 🔥
+  // =====================================================================
+  async function cargarDatos(silencioso = true) {
     try {
-      setCargando(true);
+      // Solo mostramos la pantalla completa de carga si "silencioso" es falso
+      if (!silencioso) setCargando(true);
+      
       const { data: inv, error: errInv } = await supabase.from('inventario').select('*');
       const { data: cli, error: errCli } = await supabase.from('clientes').select('*');
       const { data: pag, error: errPag } = await supabase.from('pagos').select('*');
@@ -122,6 +128,7 @@ export default function App() {
         handleLogout();
       }
     } finally {
+      // Siempre quitamos el candado de carga al terminar
       setCargando(false);
     }
   }
@@ -168,9 +175,8 @@ export default function App() {
   }
 
   // =====================================================================
-  // 🔥 NUEVA MEMORIA INMORTAL (AUTO-GUARDADO ANTI REFRESH) 🔥
+  // MEMORIA INMORTAL DE MODALES (AUTO-GUARDADO ANTI REFRESH)
   // =====================================================================
-  
   const [modalCli, setModalCli] = useState(() => localStorage.getItem('alu_modalCli') === 'true');
   const [cliNom, setCliNom] = useState(() => localStorage.getItem('alu_cliNom') || '');
   const [cliNum, setCliNum] = useState(() => localStorage.getItem('alu_cliNum') || '');
@@ -182,7 +188,6 @@ export default function App() {
   const [modalReemplazo, setModalReemplazo] = useState(() => localStorage.getItem('alu_modalReemplazo') === 'true');
   const [textoReemplazo, setTextoReemplazo] = useState(() => localStorage.getItem('alu_textoReemplazo') || '');
 
-  // Guardar en el navegador instantáneamente cada vez que algo cambia
   useEffect(() => {
     localStorage.setItem('alu_modalCli', modalCli);
     localStorage.setItem('alu_cliNom', cliNom);
@@ -198,7 +203,6 @@ export default function App() {
     localStorage.setItem('alu_textoReemplazo', textoReemplazo);
   }, [modalReemplazo, textoReemplazo]);
 
-  // Funciones para limpiar la memoria solo cuando cancelamos o guardamos con éxito
   function cerrarModalCli() {
     setModalCli(false);
     setCliNom('');
@@ -274,7 +278,7 @@ export default function App() {
         await supabase.from('clientes').update({ fin: nuevaFecha, pago: 'Pagado' }).eq('id', c.id);
       }
       mostrarNotificacion(`Cuentas renovadas exitosamente`, 'success');
-      cargarDatos();
+      cargarDatos(true);
     } catch (error) {
       mostrarNotificacion('Error al renovar: ' + error.message, 'error');
     }
@@ -286,7 +290,7 @@ export default function App() {
       const { error } = await supabase.from('clientes').update({ pago: 'Pagado' }).in('id', ids);
       if (error) throw error;
       mostrarNotificacion(`¡Deuda saldada! (${cuentas.length} cuentas pagadas)`, 'success');
-      cargarDatos();
+      cargarDatos(true);
     } catch (error) {
       mostrarNotificacion('Error al actualizar pago: ' + error.message, 'error');
     }
@@ -303,7 +307,6 @@ export default function App() {
       return mostrarNotificacion('Error: El formato debe contener pares exactos de correos (Antiguo y Nuevo).', 'error');
     }
 
-    setCargando(true);
     try {
       let reemplazados = 0;
       let noEncontrados = 0;
@@ -331,12 +334,10 @@ export default function App() {
       }
 
       mostrarNotificacion(`✅ ${reemplazados} reemplazos listos. ${noEncontrados > 0 ? `⚠️ ${noEncontrados} no encontrados en sistema.` : ''}`, 'success');
-      cerrarModalReemplazo(); // Cierra y limpia la memoria del modal
-      cargarDatos();
+      cerrarModalReemplazo(); 
+      cargarDatos(true);
     } catch (error) {
       mostrarNotificacion('Error al procesar reemplazos: ' + error.message, 'error');
-    } finally {
-      setCargando(false);
     }
   }
 
@@ -344,7 +345,6 @@ export default function App() {
   async function limpiarDuplicados() {
     if (!confirm('¿Estás seguro de limpiar los correos duplicados? El sistema conservará uno de cada correo y borrará los repetidos.')) return;
     
-    setCargando(true);
     try {
       const { data, error } = await supabase.from('inventario').select('*');
       if (error) throw error;
@@ -369,9 +369,7 @@ export default function App() {
       });
 
       if (idsAEliminar.length === 0) {
-        mostrarNotificacion('No se encontraron correos duplicados', 'success');
-        setCargando(false);
-        return;
+        return mostrarNotificacion('No se encontraron correos duplicados', 'success');
       }
 
       for (let i = 0; i < idsAEliminar.length; i += 100) {
@@ -381,11 +379,9 @@ export default function App() {
       }
 
       mostrarNotificacion(`Limpieza exitosa: ${idsAEliminar.length} eliminados.`, 'success');
-      cargarDatos();
+      cargarDatos(true);
     } catch (err) {
       mostrarNotificacion('Error al limpiar duplicados: ' + err.message, 'error');
-    } finally {
-      setCargando(false);
     }
   }
 
@@ -395,7 +391,7 @@ export default function App() {
       const { error } = await supabase.from('inventario').delete().eq('id', id);
       if (error) throw error;
       mostrarNotificacion('Cuenta eliminada', 'success');
-      cargarDatos();
+      cargarDatos(true);
     } catch (error) {
       mostrarNotificacion('Error al eliminar cuenta: ' + error.message, 'error');
     }
@@ -460,7 +456,7 @@ export default function App() {
       setLotePrecio('');
       setLoteCorreos('');
       setModalInv(false);
-      cargarDatos();
+      cargarDatos(true);
     } catch (error) {
       mostrarNotificacion('Error al guardar el lote: ' + error.message, 'error');
     }
@@ -523,9 +519,9 @@ export default function App() {
       const { error: cliError } = await supabase.from('clientes').insert(nuevosClientes);
       if (cliError) throw cliError;
 
-      cerrarModalCli(); // Cierra y limpia la memoria
+      cerrarModalCli(); 
       mostrarNotificacion(`¡${itemsAAsignar.length} cuentas asignadas exitosamente a ${cliNom}!`, 'success');
-      cargarDatos();
+      cargarDatos(true);
     } catch (error) {
       mostrarNotificacion('Error al guardar asignaciones: ' + error.message, 'error');
     }
@@ -548,7 +544,7 @@ export default function App() {
       setGastoMonto('');
       setModalCaja(false);
       mostrarNotificacion('Transacción registrada', 'success');
-      cargarDatos();
+      cargarDatos(true);
     } catch (error) {
       mostrarNotificacion('Error en control de gastos: ' + error.message, 'error');
     }
@@ -568,7 +564,7 @@ export default function App() {
           .eq('id', invMatch.id);
       }
       mostrarNotificacion('Cliente eliminado y cuenta liberada', 'success');
-      cargarDatos();
+      cargarDatos(true);
     } catch (error) {
       mostrarNotificacion('Error al eliminar: ' + error.message, 'error');
     }
@@ -801,6 +797,7 @@ export default function App() {
                     </button>
                   </div>
 
+                  {/* TARJETA DE CAPITAL INVERTIDO */}
                   <div className="p-4 rounded-2xl bg-neutral-900/40 border border-neutral-800/60 flex flex-col md:flex-row justify-between items-start md:items-center text-sm font-semibold text-neutral-300 shadow-inner gap-2">
                     <span className="flex items-center gap-2 text-amber-500/80"><Package className="w-5 h-5"/> Capital Invertido en Cuentas Libres (Por Vender):</span>
                     <span className="text-white font-mono font-bold text-lg">S/ {capitalLibreSoles.toFixed(2)} <span className="text-neutral-500 text-xs font-normal">({capitalStockLibreUsdt.toFixed(2)} USDT)</span></span>
@@ -901,12 +898,12 @@ export default function App() {
                 </div>
               )}
 
-              {/* VISTA VENTAS */}
+              {/* VISTA VENTAS: MOSTRAR TODAS LAS CUENTAS SIN RESTRICCIÓN DE CANTIDAD */}
               {vista === 'ventas' && (
                 <div className="space-y-6 animate-fade-in">
                   <div className="flex justify-between items-center">
                     <h2 className="text-lg font-bold text-white">Cuentas Listas para Entregar ({cuentasLibres.length})</h2>
-                    <button onClick={cargarDatos} className="bg-[#141414] hover:bg-neutral-800 text-neutral-300 px-4 py-2.5 rounded-2xl text-sm transition border border-neutral-800 flex items-center gap-2 shadow-sm font-semibold"><RefreshCw className="w-4 h-4" /> Actualizar</button>
+                    <button onClick={() => cargarDatos(false)} className="bg-[#141414] hover:bg-neutral-800 text-neutral-300 px-4 py-2.5 rounded-2xl text-sm transition border border-neutral-800 flex items-center gap-2 shadow-sm font-semibold"><RefreshCw className="w-4 h-4" /> Actualizar</button>
                   </div>
 
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -1012,7 +1009,7 @@ export default function App() {
                     <div className="flex flex-wrap items-center gap-3 w-full md:w-auto justify-end">
                       <button onClick={() => exportarACSV(clientes, 'clientes_aluria')} className="bg-[#141414] hover:bg-neutral-800 text-neutral-200 px-4 py-2.5 rounded-xl text-sm font-semibold transition border border-neutral-800 flex items-center gap-2 shadow-sm"><Download className="w-4 h-4" /> Exportar CSV</button>
                       <button onClick={() => setModoResumen(!modoResumen)} className={`px-4 py-2.5 rounded-xl text-sm font-bold transition flex items-center gap-2 ${modoResumen ? 'bg-red-900 text-white border border-red-700' : 'bg-neutral-900 text-neutral-300 border border-neutral-800 hover:bg-neutral-800'}`}><TrendingUp className="w-4 h-4" /> {modoResumen ? 'Ver Directorio Normal' : 'Ver Resumen LTV'}</button>
-                      <button onClick={() => { setCliNom(''); setCliNum(''); setCliCuentaAsignada(''); setModalCli(true); }} className="bg-gradient-to-r from-[#800f11] to-red-600 hover:from-red-700 hover:to-red-500 text-white px-5 py-2.5 rounded-xl text-sm font-bold transition shadow-md shadow-red-950 flex items-center gap-2"><Plus className="w-4 h-4" /> Asignar / Nuevo</button>
+                      <button onClick={() => setModalCli(true)} className="bg-gradient-to-r from-[#800f11] to-red-600 hover:from-red-700 hover:to-red-500 text-white px-5 py-2.5 rounded-xl text-sm font-bold transition shadow-md shadow-red-950 flex items-center gap-2"><Plus className="w-4 h-4" /> Asignar / Nuevo</button>
                     </div>
                   </div>
 
