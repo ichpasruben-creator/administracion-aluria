@@ -83,13 +83,12 @@ export default function App() {
   useEffect(() => {
     if (!session) return;
     
-    // --- ACTUALIZACIÓN SILENCIOSA DE INICIO ---
     cargarDatos(true); 
 
     const channel = supabase
       .channel('schema-db-changes')
       .on('postgres_changes', { event: '*', schema: 'public' }, () => {
-        cargarDatos(true); // Se actualiza en silencio cuando hay cambios
+        cargarDatos(true);
       })
       .subscribe();
 
@@ -99,11 +98,10 @@ export default function App() {
   }, [session]);
 
   // =====================================================================
-  // 🔥 ACTUALIZACIÓN SILENCIOSA (ANTI-BLOQUEOS DE PANTALLA) 🔥
+  // 🔥 ACTUALIZACIÓN SILENCIOSA 🔥
   // =====================================================================
   async function cargarDatos(silencioso = true) {
     try {
-      // Solo mostramos la pantalla completa de carga si "silencioso" es falso
       if (!silencioso) setCargando(true);
       
       const { data: inv, error: errInv } = await supabase.from('inventario').select('*');
@@ -128,7 +126,6 @@ export default function App() {
         handleLogout();
       }
     } finally {
-      // Siempre quitamos el candado de carga al terminar
       setCargando(false);
     }
   }
@@ -143,7 +140,7 @@ export default function App() {
       });
       if (error) throw error;
     } catch (error) {
-      mostrarNotificacion('Error de autenticación: ' + error.message, 'error');
+      mostrarNotificacion('Error de autenticación: Verifica tu correo o contraseña.', 'error');
     } finally {
       setAuthLoading(false);
     }
@@ -175,7 +172,7 @@ export default function App() {
   }
 
   // =====================================================================
-  // MEMORIA INMORTAL DE MODALES (AUTO-GUARDADO ANTI REFRESH)
+  // MEMORIA INMORTAL DE MODALES
   // =====================================================================
   const [modalCli, setModalCli] = useState(() => localStorage.getItem('alu_modalCli') === 'true');
   const [cliNom, setCliNom] = useState(() => localStorage.getItem('alu_cliNom') || '');
@@ -296,6 +293,39 @@ export default function App() {
     }
   }
 
+  // --- NUEVO: FUNCIÓN PARA "NO RENOVÓ" (CANCELA Y LIBERA CUENTAS) ---
+  async function cancelarRenovacionGrupo(cuentas, nombreCli) {
+    if (!confirm(`¿Estás seguro de que ${nombreCli} NO RENOVÓ?\nLas ${cuentas.length} cuenta(s) volverán al stock disponible.`)) return;
+
+    setCargando(true);
+    try {
+      const idsClientes = cuentas.map(c => c.id);
+
+      // 1. Encontrar esas cuentas en el inventario y marcarlas como disponibles
+      for (let c of cuentas) {
+        const correoLimpio = c.cuenta.split(' (')[0].trim().toLowerCase();
+        const invMatch = inventario.find(i => (i.correo || '').toLowerCase().trim() === correoLimpio);
+        
+        if (invMatch) {
+          await supabase
+            .from('inventario')
+            .update({ estado: 'Disponible', cliente_asignado: null })
+            .eq('id', invMatch.id);
+        }
+      }
+
+      // 2. Borrar la deuda/registros de la tabla de clientes
+      const { error } = await supabase.from('clientes').delete().in('id', idsClientes);
+      if (error) throw error;
+
+      mostrarNotificacion(`Cuentas de ${nombreCli} liberadas al stock con éxito.`, 'success');
+      cargarDatos(true);
+    } catch (error) {
+      mostrarNotificacion('Error al liberar cuentas: ' + error.message, 'error');
+      setCargando(false);
+    }
+  }
+
   // --- REEMPLAZO INTELIGENTE DE CAÍDAS ---
   async function procesarReemplazos(e) {
     e.preventDefault();
@@ -307,6 +337,7 @@ export default function App() {
       return mostrarNotificacion('Error: El formato debe contener pares exactos de correos (Antiguo y Nuevo).', 'error');
     }
 
+    setCargando(true);
     try {
       let reemplazados = 0;
       let noEncontrados = 0;
@@ -338,6 +369,8 @@ export default function App() {
       cargarDatos(true);
     } catch (error) {
       mostrarNotificacion('Error al procesar reemplazos: ' + error.message, 'error');
+    } finally {
+      setCargando(false);
     }
   }
 
@@ -345,6 +378,7 @@ export default function App() {
   async function limpiarDuplicados() {
     if (!confirm('¿Estás seguro de limpiar los correos duplicados? El sistema conservará uno de cada correo y borrará los repetidos.')) return;
     
+    setCargando(true);
     try {
       const { data, error } = await supabase.from('inventario').select('*');
       if (error) throw error;
@@ -369,7 +403,9 @@ export default function App() {
       });
 
       if (idsAEliminar.length === 0) {
-        return mostrarNotificacion('No se encontraron correos duplicados', 'success');
+        mostrarNotificacion('No se encontraron correos duplicados', 'success');
+        setCargando(false);
+        return;
       }
 
       for (let i = 0; i < idsAEliminar.length; i += 100) {
@@ -382,6 +418,8 @@ export default function App() {
       cargarDatos(true);
     } catch (err) {
       mostrarNotificacion('Error al limpiar duplicados: ' + err.message, 'error');
+    } finally {
+      setCargando(false);
     }
   }
 
@@ -570,54 +608,81 @@ export default function App() {
     }
   }
 
+  // =====================================================================
+  // 🔥 PANTALLA DE INICIO DE SESIÓN (ESTILO ANIME/OSCURO) 🔥
+  // =====================================================================
   if (!session) {
     return (
-      <div className="flex h-screen items-center justify-center bg-[#050505] text-white">
+      <div 
+        className="flex h-screen items-center justify-center bg-cover bg-center bg-no-repeat relative"
+        style={{ backgroundImage: "url('https://images.hdqwalls.com/download/itachi-uchiha-naruto-4k-yd-1920x1080.jpg')" }} 
+      >
+        <div className="absolute inset-0 bg-black/60 backdrop-blur-[2px]"></div>
+
         {notificacion.visible && (
-          <div className={`fixed top-8 right-8 z-50 px-5 py-3.5 rounded-2xl shadow-2xl flex items-center gap-3 animate-fade-in ${
-            notificacion.tipo === 'success' ? 'bg-green-950/90 border border-green-900 text-green-400' : 'bg-red-950/90 border border-red-900 text-red-400'
+          <div className={`fixed top-8 right-8 z-50 px-5 py-3.5 rounded-xl shadow-2xl flex items-center gap-3 animate-fade-in ${
+            notificacion.tipo === 'success' ? 'bg-green-900/90 border border-green-700 text-green-100' : 'bg-red-900/90 border border-red-700 text-red-100'
           }`}>
             {notificacion.tipo === 'success' ? <Check className="w-5 h-5" /> : <AlertCircle className="w-5 h-5" />}
             <span className="font-bold text-sm tracking-wide">{notificacion.mensaje}</span>
           </div>
         )}
 
-        <div className="p-10 rounded-3xl border border-[#3b0909] bg-[#0d0d0d] w-full max-w-md shadow-2xl shadow-red-950/40 space-y-8 relative overflow-hidden">
-          <div className="absolute top-0 right-0 w-32 h-32 bg-red-600/10 rounded-full blur-3xl pointer-events-none"></div>
-          <div className="text-center space-y-3 relative z-10">
-            <div className="w-16 h-16 rounded-2xl bg-gradient-to-tr from-[#800f11] to-red-600 mx-auto flex items-center justify-center shadow-lg shadow-red-950">
-              <Sparkles className="text-white w-8 h-8" />
-            </div>
-            <h2 className="text-3xl font-extrabold tracking-tight bg-gradient-to-r from-white via-red-200 to-red-500 bg-clip-text text-transparent">
-              Administracion aluria
+        <div className="relative z-10 bg-[#161821]/95 border border-[#2a2d3d] p-10 rounded-2xl w-full max-w-[26rem] shadow-2xl">
+          <div className="text-center mb-8">
+            <h2 className="text-4xl font-black tracking-tight text-white mb-1">
+              ALURIA<span className="text-red-500">.ADMIN</span>
             </h2>
-            <p className="text-xs uppercase tracking-widest text-neutral-400 font-semibold">
-              Portal Corporativo
+            <p className="text-xs text-neutral-400 font-medium">
+              Acceso Seguro al Panel
             </p>
           </div>
-          <form onSubmit={handleLogin} className="space-y-5 relative z-10">
+          
+          <form onSubmit={handleLogin} className="space-y-5">
             <div>
-              <label className="text-xs text-neutral-300 block mb-2 font-bold uppercase tracking-wider">Correo Electrónico</label>
+              <label className="text-[10px] text-neutral-400 font-bold uppercase tracking-wider block mb-1.5">Correo Admin</label>
               <div className="relative">
-                <Mail className="absolute left-3.5 top-3.5 w-4 h-4 text-red-500" />
-                <input type="email" required value={emailLogin} onChange={(e) => setEmailLogin(e.target.value)} className="w-full pl-11 pr-4 py-3 bg-[#141414] border border-neutral-800 rounded-xl text-sm text-white outline-none focus:ring-2 focus:ring-red-600 focus:border-transparent transition shadow-inner" placeholder="tucorreo@dominio.com" />
+                <Mail className="absolute left-3.5 top-3 w-4 h-4 text-blue-400" />
+                <input 
+                  type="email" 
+                  required 
+                  value={emailLogin} 
+                  onChange={(e) => setEmailLogin(e.target.value)} 
+                  className="w-full pl-10 pr-4 py-2.5 bg-[#e8f0fe] text-black border border-transparent rounded-lg text-sm outline-none focus:ring-2 focus:ring-blue-500 transition shadow-inner font-medium" 
+                  placeholder="admin@aluria.com" 
+                />
               </div>
             </div>
+            
             <div>
-              <label className="text-xs text-neutral-300 block mb-2 font-bold uppercase tracking-wider">Contraseña</label>
+              <label className="text-[10px] text-neutral-400 font-bold uppercase tracking-wider block mb-1.5">Contraseña</label>
               <div className="relative">
-                <Lock className="absolute left-3.5 top-3.5 w-4 h-4 text-red-500" />
-                <input type="password" required value={passLogin} onChange={(e) => setPassLogin(e.target.value)} className="w-full pl-11 pr-4 py-3 bg-[#141414] border border-neutral-800 rounded-xl text-sm text-white outline-none focus:ring-2 focus:ring-red-600 focus:border-transparent transition shadow-inner" placeholder="••••••••" />
+                <Lock className="absolute left-3.5 top-3 w-4 h-4 text-amber-500" />
+                <input 
+                  type="password" 
+                  required 
+                  value={passLogin} 
+                  onChange={(e) => setPassLogin(e.target.value)} 
+                  className="w-full pl-10 pr-4 py-2.5 bg-[#0f111a] border border-[#2a2d3d] rounded-lg text-sm text-white outline-none focus:ring-2 focus:ring-red-500 transition shadow-inner font-medium" 
+                  placeholder="••••••••" 
+                />
               </div>
             </div>
-            <button type="submit" disabled={authLoading} className="w-full py-3.5 bg-gradient-to-r from-[#800f11] to-red-600 hover:from-red-700 hover:to-red-500 text-white rounded-xl font-bold transition duration-200 shadow-xl shadow-red-950 flex justify-center items-center gap-2 tracking-wide">
-              {authLoading ? 'Verificando...' : 'Iniciar Sesión'}
+
+            <div className="flex items-center gap-2 pt-1 pb-1">
+              <input type="checkbox" id="mantener" className="w-3.5 h-3.5 rounded border-gray-600 bg-[#0f111a] text-red-500 focus:ring-red-500 focus:ring-offset-[#161821] cursor-pointer" />
+              <label htmlFor="mantener" className="text-xs text-neutral-300 cursor-pointer select-none">Mantener sesión activa</label>
+            </div>
+
+            <button type="submit" disabled={authLoading} className="w-full py-3 bg-[#d93838] hover:bg-[#b02c2c] text-white rounded-lg text-sm font-bold transition duration-200 shadow-lg flex justify-center items-center gap-2 tracking-wide">
+              {authLoading ? 'Verificando...' : 'Ingresar al Sistema'}
             </button>
           </form>
         </div>
       </div>
     );
   }
+  // =====================================================================
 
   const numTc = parseFloat(tc) || 3.42;
 
@@ -840,7 +905,8 @@ export default function App() {
                               <p className="font-bold text-white text-base">{grupo.nombre} <span className="text-xs text-neutral-400 font-normal">({grupo.whatsapp})</span></p>
                               <p className="text-xs text-red-400 font-mono mt-0.5">{grupo.cuentas.length} cuentas vencen hoy (Renovación: S/ {grupo.cuentas.length * 35})</p>
                             </div>
-                            <div className="flex items-center gap-3">
+                            <div className="flex flex-wrap items-center gap-2 md:gap-3">
+                              <button onClick={() => cancelarRenovacionGrupo(grupo.cuentas, grupo.nombre)} className="text-neutral-400 bg-neutral-900/50 border border-neutral-800 px-3.5 py-2 rounded-xl text-xs font-bold hover:bg-neutral-800 hover:text-white transition">No renovó</button>
                               <a href={generarLinkWp(grupo)} target="_blank" rel="noreferrer" className="bg-[#1f0a0a] hover:bg-[#331111] text-red-300 border border-red-900/40 px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-sm">Cobrar Wp</a>
                               <button onClick={() => renovarCobranzaGrupo(grupo.cuentas)} className="bg-gradient-to-r from-[#800f11] to-red-600 hover:from-red-700 hover:to-red-500 text-white px-5 py-2 rounded-xl text-xs font-bold transition shadow-md shadow-red-950 flex items-center gap-1.5"><RefreshCw className="w-3.5 h-3.5" /> Renovar Todo</button>
                             </div>
@@ -858,12 +924,13 @@ export default function App() {
                           <p className="text-neutral-400 text-sm font-medium">Todos al día 🎉</p>
                         ) : (
                           deudasPendientesAgrupadas.map((grupo) => (
-                            <div key={grupo.whatsapp} className="flex justify-between items-center py-4 border-b border-neutral-900 text-sm">
+                            <div key={grupo.whatsapp} className="flex justify-between items-center py-4 border-b border-neutral-900 text-sm gap-2">
                               <div>
                                 <span className="font-bold text-gray-200 block">{grupo.nombre}</span>
                                 <span className="text-xs text-red-400 font-bold">{grupo.cuentas.length} cuentas (Deuda: S/ {grupo.cuentas.length * 35})</span>
                               </div>
                               <div className="flex flex-col sm:flex-row items-end sm:items-center gap-2">
+                                <button onClick={() => cancelarRenovacionGrupo(grupo.cuentas, grupo.nombre)} className="text-neutral-400 bg-neutral-900/50 border border-neutral-800 px-3.5 py-1.5 rounded-xl text-xs font-bold hover:bg-neutral-800 transition" title="Liberar cuenta al stock">No renovó</button>
                                 <button onClick={() => marcarComoPagadoGrupo(grupo.cuentas)} className="text-green-400 bg-green-950/40 border border-green-900/50 px-3.5 py-1.5 rounded-xl text-xs font-bold hover:bg-green-900/40 transition">✓ Pagó</button>
                                 <a href={generarLinkWp(grupo)} target="_blank" rel="noreferrer" className="text-red-400 bg-red-950/40 border border-red-900/50 px-3.5 py-1.5 rounded-xl text-xs font-bold hover:bg-red-900/40 transition">Cobrar Wp</a>
                               </div>
@@ -898,7 +965,7 @@ export default function App() {
                 </div>
               )}
 
-              {/* VISTA VENTAS: MOSTRAR TODAS LAS CUENTAS SIN RESTRICCIÓN DE CANTIDAD */}
+              {/* VISTA VENTAS */}
               {vista === 'ventas' && (
                 <div className="space-y-6 animate-fade-in">
                   <div className="flex justify-between items-center">
@@ -1009,7 +1076,7 @@ export default function App() {
                     <div className="flex flex-wrap items-center gap-3 w-full md:w-auto justify-end">
                       <button onClick={() => exportarACSV(clientes, 'clientes_aluria')} className="bg-[#141414] hover:bg-neutral-800 text-neutral-200 px-4 py-2.5 rounded-xl text-sm font-semibold transition border border-neutral-800 flex items-center gap-2 shadow-sm"><Download className="w-4 h-4" /> Exportar CSV</button>
                       <button onClick={() => setModoResumen(!modoResumen)} className={`px-4 py-2.5 rounded-xl text-sm font-bold transition flex items-center gap-2 ${modoResumen ? 'bg-red-900 text-white border border-red-700' : 'bg-neutral-900 text-neutral-300 border border-neutral-800 hover:bg-neutral-800'}`}><TrendingUp className="w-4 h-4" /> {modoResumen ? 'Ver Directorio Normal' : 'Ver Resumen LTV'}</button>
-                      <button onClick={() => setModalCli(true)} className="bg-gradient-to-r from-[#800f11] to-red-600 hover:from-red-700 hover:to-red-500 text-white px-5 py-2.5 rounded-xl text-sm font-bold transition shadow-md shadow-red-950 flex items-center gap-2"><Plus className="w-4 h-4" /> Asignar / Nuevo</button>
+                      <button onClick={() => { setCliNom(''); setCliNum(''); setCliCuentaAsignada(''); setModalCli(true); }} className="bg-gradient-to-r from-[#800f11] to-red-600 hover:from-red-700 hover:to-red-500 text-white px-5 py-2.5 rounded-xl text-sm font-bold transition shadow-md shadow-red-950 flex items-center gap-2"><Plus className="w-4 h-4" /> Asignar / Nuevo</button>
                     </div>
                   </div>
 
