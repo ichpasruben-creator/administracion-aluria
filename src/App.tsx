@@ -34,7 +34,15 @@ export default function App() {
   const [passLogin, setPassLogin] = useState('');
   const [authLoading, setAuthLoading] = useState(false);
 
-  const [vista, setVista] = useState('dashboard');
+  // --- MEMORIA PARA RECORDAR LA ÚLTIMA PESTAÑA ABIERTA ---
+  const [vista, setVista] = useState(() => {
+    return localStorage.getItem('vista_aluria') || 'dashboard';
+  });
+
+  useEffect(() => {
+    localStorage.setItem('vista_aluria', vista);
+  }, [vista]);
+
   const [inventario, setInventario] = useState([]);
   const [clientes, setClientes] = useState([]);
   const [pagos, setPagos] = useState([]);
@@ -253,7 +261,6 @@ export default function App() {
   async function procesarReemplazos(e) {
     e.preventDefault();
     
-    // Extrae todos los correos automáticamente sin importar emoticonos o saltos de línea
     const regexCorreos = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
     const correosEncontrados = textoReemplazo.match(regexCorreos) || [];
 
@@ -767,6 +774,7 @@ export default function App() {
                     </button>
                   </div>
 
+                  {/* TARJETA DE CAPITAL INVERTIDO */}
                   <div className="p-4 rounded-2xl bg-neutral-900/40 border border-neutral-800/60 flex flex-col md:flex-row justify-between items-start md:items-center text-sm font-semibold text-neutral-300 shadow-inner gap-2">
                     <span className="flex items-center gap-2 text-amber-500/80"><Package className="w-5 h-5"/> Capital Invertido en Cuentas Libres (Por Vender):</span>
                     <span className="text-white font-mono font-bold text-lg">S/ {capitalLibreSoles.toFixed(2)} <span className="text-neutral-500 text-xs font-normal">({capitalStockLibreUsdt.toFixed(2)} USDT)</span></span>
