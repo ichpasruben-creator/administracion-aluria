@@ -233,7 +233,7 @@ export default function App() {
 
   async function guardarEdicionCliente(e) {
     e.preventDefault();
-    setCargando(true);
+    // NO PONEMOS setCargando(true) PARA EVITAR QUE LA PANTALLA SALTE AL TOP
     try {
       const { error } = await supabase
         .from('clientes')
@@ -242,14 +242,13 @@ export default function App() {
       
       if (error) throw error;
       
-      mostrarNotificacion('Datos del cliente actualizados con éxito', 'success');
+      mostrarNotificacion('Datos actualizados con éxito', 'success');
       setModalEditarCli(false);
       setClienteEditando(null);
-      cerrarModalCli(); // Limpia los campos
-      cargarDatos(true);
+      cerrarModalCli(); // Limpia memoria
+      cargarDatos(true); // Recarga silenciosa que mantiene tu scroll intacto
     } catch (error) {
       mostrarNotificacion('Error al editar: ' + error.message, 'error');
-      setCargando(false);
     }
   }
   // =====================================================================
@@ -342,18 +341,14 @@ export default function App() {
     }
   }
 
-  // --- FUNCIÓN PARA "NO RENOVÓ" (CANCELA Y LIBERA CUENTAS) ---
+  // --- FUNCIÓN PARA "NO RENOVÓ" PARA GRUPOS (DASHBOARD) ---
   async function cancelarRenovacionGrupo(cuentas, nombreCli) {
     if (!confirm(`¿Estás seguro de que ${nombreCli} NO RENOVÓ?\nLas ${cuentas.length} cuenta(s) volverán al stock disponible.`)) return;
-
-    setCargando(true);
     try {
       const idsClientes = cuentas.map(c => c.id);
-
       for (let c of cuentas) {
         const regexCorreos = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
         const correos = c.cuenta.match(regexCorreos) || [];
-        
         for(let correo of correos) {
           const invMatch = inventario.find(i => (i.correo || '').toLowerCase().trim() === correo.toLowerCase().trim());
           if (invMatch) {
@@ -361,31 +356,47 @@ export default function App() {
           }
         }
       }
-
       const { error } = await supabase.from('clientes').delete().in('id', idsClientes);
       if (error) throw error;
-
       mostrarNotificacion(`Cuentas de ${nombreCli} liberadas al stock con éxito.`, 'success');
       cargarDatos(true);
     } catch (error) {
       mostrarNotificacion('Error al liberar cuentas: ' + error.message, 'error');
-      setCargando(false);
+    }
+  }
+
+  // --- FUNCIÓN PARA "NO RENOVÓ" PARA CLIENTE ÚNICO (VISTA FECHAS) ---
+  async function cancelarRenovacionCliente(cliente) {
+    if (!confirm(`¿Estás seguro de que ${cliente.nombre} NO RENOVÓ?\nSus cuentas volverán al stock y se eliminará el registro.`)) return;
+    // SIN setCargando PARA NO PERDER EL SCROLL
+    try {
+      const regexCorreos = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
+      const correos = cliente.cuenta.match(regexCorreos) || [];
+      for(let correo of correos) {
+        const invMatch = inventario.find(i => (i.correo || '').toLowerCase().trim() === correo.toLowerCase().trim());
+        if (invMatch) {
+          await supabase.from('inventario').update({ estado: 'Disponible', cliente_asignado: null }).eq('id', invMatch.id);
+        }
+      }
+      const { error } = await supabase.from('clientes').delete().eq('id', cliente.id);
+      if (error) throw error;
+      
+      mostrarNotificacion(`Cuenta de ${cliente.nombre} liberada con éxito.`, 'success');
+      cargarDatos(true);
+    } catch (error) {
+      mostrarNotificacion('Error al liberar cuenta: ' + error.message, 'error');
     }
   }
 
   // --- DESASIGNAR UNA SOLA CUENTA DESDE INVENTARIO ---
   async function desasignarCuentaUnica(item) {
     if (!confirm(`¿Estás seguro de DESASIGNAR la cuenta ${item.correo}?\nVolverá a estar "Disponible" en tu stock.`)) return;
-    
-    setCargando(true);
     try {
       await supabase.from('inventario').update({ estado: 'Disponible', cliente_asignado: null }).eq('id', item.id);
-      
       const cliMatch = clientes.find(c => (c.cuenta || '').toLowerCase().includes(item.correo.toLowerCase()));
       if (cliMatch) {
         const regex = new RegExp(`${item.correo}[^,]*`, 'gi');
         let nuevaCuenta = cliMatch.cuenta.replace(regex, '').replace(/,\s*,/g, ',').replace(/^,|,$/g, '').trim();
-        
         if (nuevaCuenta === '') {
           await supabase.from('clientes').delete().eq('id', cliMatch.id);
         } else {
@@ -396,14 +407,12 @@ export default function App() {
       cargarDatos(true);
     } catch (error) {
       mostrarNotificacion('Error al desasignar: ' + error.message, 'error');
-      setCargando(false);
     }
   }
 
   // --- REEMPLAZO INTELIGENTE DE CAÍDAS ---
   async function procesarReemplazos(e) {
     e.preventDefault();
-    
     const regexCorreos = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
     const correosEncontrados = textoReemplazo.match(regexCorreos) || [];
 
@@ -411,7 +420,6 @@ export default function App() {
       return mostrarNotificacion('Error: El formato debe contener pares exactos de correos (Antiguo y Nuevo).', 'error');
     }
 
-    setCargando(true);
     try {
       let reemplazados = 0;
       let noEncontrados = 0;
@@ -443,16 +451,12 @@ export default function App() {
       cargarDatos(true);
     } catch (error) {
       mostrarNotificacion('Error al procesar reemplazos: ' + error.message, 'error');
-    } finally {
-      setCargando(false);
     }
   }
 
   // --- LIMPIEZA DE DUPLICADOS ---
   async function limpiarDuplicados() {
     if (!confirm('¿Estás seguro de limpiar los correos duplicados? El sistema conservará uno de cada correo y borrará los repetidos.')) return;
-    
-    setCargando(true);
     try {
       const { data, error } = await supabase.from('inventario').select('*');
       if (error) throw error;
@@ -477,9 +481,7 @@ export default function App() {
       });
 
       if (idsAEliminar.length === 0) {
-        mostrarNotificacion('No se encontraron correos duplicados', 'success');
-        setCargando(false);
-        return;
+        return mostrarNotificacion('No se encontraron correos duplicados', 'success');
       }
 
       for (let i = 0; i < idsAEliminar.length; i += 100) {
@@ -492,8 +494,6 @@ export default function App() {
       cargarDatos(true);
     } catch (err) {
       mostrarNotificacion('Error al limpiar duplicados: ' + err.message, 'error');
-    } finally {
-      setCargando(false);
     }
   }
 
@@ -761,7 +761,6 @@ export default function App() {
 
   const numTc = parseFloat(tc) || 3.42;
 
-  // --- CÁLCULO FINANCIERO EXPERTO Y A PRUEBA DE FALLOS ---
   let costoStockVendidoUsdt = 0;
   let capitalStockLibreUsdt = 0;
 
@@ -776,10 +775,10 @@ export default function App() {
   const cuentasLibres = inventario.filter((i) => i.estado === 'Disponible' && (!i.cliente_asignado || i.cliente_asignado.trim() === ''));
   const libres = cuentasLibres.length;
 
+  // CÁLCULO FINANCIERO CORREGIDO (LEE ABSOLUTAMENTE TODOS LOS CORREOS DEL CLIENTE)
   let ingresosSoles = 0;
   clientes.forEach((cli) => {
     if ((cli.pago || '').trim() === 'Pagado') {
-      // Extraemos todos los correos que tiene este cliente en su texto
       const regexCorreos = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
       const correosEnCliente = cli.cuenta.match(regexCorreos) || [];
       
@@ -1088,7 +1087,9 @@ export default function App() {
                       }
 
                       return diasRenderizados.map(dia => {
-                        const lista = gruposPorDia[dia];
+                        // ORDEN ALFABÉTICO DENTRO DEL DÍA
+                        const lista = gruposPorDia[dia].sort((a, b) => a.nombre.localeCompare(b.nombre));
+                        
                         return (
                           <div key={dia} className="rounded-3xl border border-[#2b0d0d] bg-[#0d0d0d] overflow-hidden shadow-2xl">
                             <div className="bg-gradient-to-r from-[#140a0a] to-[#0a0505] border-b border-[#2b0d0d] px-6 py-4 flex items-center gap-4">
@@ -1124,6 +1125,13 @@ export default function App() {
                                       <span className={`px-3 py-1.5 rounded-xl text-xs font-bold border ${colorDias}`}>
                                         {difDias < 0 ? `Vencido (${Math.abs(difDias)} d)` : difDias === 0 ? '¡Vence Hoy!' : `Faltan ${difDias} días`}
                                       </span>
+                                      
+                                      {/* BOTÓN NO RENOVÓ (LIBERAR) */}
+                                      <button onClick={() => cancelarRenovacionCliente(c)} className="p-2.5 bg-neutral-800 hover:bg-red-900/40 text-red-400 rounded-xl transition border border-neutral-700 hover:border-red-900/50 shadow-sm" title="No renovó (Liberar Cuentas y Eliminar)">
+                                        <UserMinus className="w-4 h-4" />
+                                      </button>
+                                      
+                                      {/* BOTÓN EDITAR */}
                                       <button onClick={() => abrirEditarCliente(c)} className="p-2.5 bg-neutral-800 hover:bg-blue-900/40 text-blue-400 rounded-xl transition border border-neutral-700 hover:border-blue-900/50 shadow-sm" title="Editar Cliente">
                                         <Edit className="w-4 h-4" />
                                       </button>
@@ -1512,7 +1520,7 @@ export default function App() {
         </div>
       )}
 
-      {/* MODAL EDITAR CLIENTE (CORREGIR FECHAS) */}
+      {/* MODAL EDITAR CLIENTE (CORREGIR FECHAS) CON AUTO-COMPLETADO */}
       {modalEditarCli && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-50 flex justify-center items-center p-4">
           <div className="bg-[#0d0d0d] border border-[#3b0909] rounded-3xl w-full max-w-md p-8 space-y-5 shadow-2xl shadow-blue-950/40">
@@ -1533,7 +1541,26 @@ export default function App() {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="text-xs font-bold uppercase tracking-wider text-neutral-400 mb-1.5 block">Fecha Inicio</label>
-                  <input type="date" required value={cliInicio} onChange={(e) => setCliInicio(e.target.value)} className="w-full bg-[#050505] border border-neutral-800 rounded-xl p-2.5 text-sm text-white outline-none focus:ring-2 focus:ring-blue-600 shadow-inner" />
+                  <input 
+                    type="date" 
+                    required 
+                    value={cliInicio} 
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setCliInicio(val);
+                      // AUTO-COMPLETADO MAGICO EN EDICION
+                      if (val) {
+                        const [yy, mm, dd] = val.split('-');
+                        const dateObj = new Date(parseInt(yy), parseInt(mm) - 1, parseInt(dd));
+                        dateObj.setMonth(dateObj.getMonth() + 1);
+                        const nY = dateObj.getFullYear();
+                        const nM = String(dateObj.getMonth() + 1).padStart(2, '0');
+                        const nD = String(dateObj.getDate()).padStart(2, '0');
+                        setCliFin(`${nY}-${nM}-${nD}`);
+                      }
+                    }} 
+                    className="w-full bg-[#050505] border border-neutral-800 rounded-xl p-2.5 text-sm text-white outline-none focus:ring-2 focus:ring-blue-600 shadow-inner" 
+                  />
                 </div>
                 <div>
                   <label className="text-xs font-bold uppercase tracking-wider text-neutral-400 mb-1.5 block">Fecha Fin</label>
