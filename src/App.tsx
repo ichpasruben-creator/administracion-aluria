@@ -188,7 +188,6 @@ export default function App() {
   const [modalReemplazo, setModalReemplazo] = useState(() => localStorage.getItem('alu_modalReemplazo') === 'true');
   const [textoReemplazo, setTextoReemplazo] = useState(() => localStorage.getItem('alu_textoReemplazo') || '');
 
-  // Modal y estado para EDITAR CLIENTES
   const [modalEditarCli, setModalEditarCli] = useState(false);
   const [clienteEditando, setClienteEditando] = useState(null);
 
@@ -233,7 +232,6 @@ export default function App() {
 
   async function guardarEdicionCliente(e) {
     e.preventDefault();
-    // NO PONEMOS setCargando(true) PARA EVITAR QUE LA PANTALLA SALTE AL TOP
     try {
       const { error } = await supabase
         .from('clientes')
@@ -245,8 +243,8 @@ export default function App() {
       mostrarNotificacion('Datos actualizados con éxito', 'success');
       setModalEditarCli(false);
       setClienteEditando(null);
-      cerrarModalCli(); // Limpia memoria
-      cargarDatos(true); // Recarga silenciosa que mantiene tu scroll intacto
+      cerrarModalCli(); 
+      cargarDatos(true); 
     } catch (error) {
       mostrarNotificacion('Error al editar: ' + error.message, 'error');
     }
@@ -273,7 +271,6 @@ export default function App() {
 
   const [copiadoIdx, setCopiadoIdx] = useState(null);
 
-  // --- OBTENER CLIENTES ÚNICOS PARA EL SELECTOR ---
   const clientesUnicos = [];
   const mapClientes = new Map();
   clientes.forEach(c => {
@@ -284,7 +281,6 @@ export default function App() {
   });
   clientesUnicos.sort((a, b) => a.nombre.localeCompare(b.nombre));
 
-  // --- AGRUPAR CUENTAS PARA COBROS MASIVOS ---
   function agruparPorWhatsapp(lista) {
     const map = {};
     lista.forEach(c => {
@@ -294,23 +290,27 @@ export default function App() {
     return Object.values(map);
   }
 
-  // --- ENLACE LIMPIO DE WSP Y COPIADO DE TEXTO ---
+  // =====================================================================
+  // 🔥 NUEVO TEXTO DE COBRO ESTÉTICO 🔥
+  // =====================================================================
   const generarTextoCobro = (grupo) => {
-    const correosStr = grupo.cuentas.map(c => c.cuenta.split(' (')[0].trim()).join(', ');
+    const correosStr = grupo.cuentas.map(c => `▪️ ${c.cuenta.split(' (')[0].trim()}`).join('\n');
     const montoTotal = grupo.cuentas.length * 35;
-    return `Hola ${grupo.nombre}, tienes un pago pendiente de: ${correosStr}. El total de la renovación es S/ ${montoTotal} al Yape 931111443 a nombre de Ruben Ich.`;
+    
+    return `👋 Hola *${grupo.nombre}*, ¿cómo estás?\n\nTienes un pago pendiente de renovación:\n\n${correosStr}\n\n💰 *Total: S/ ${montoTotal.toFixed(2)}*\n\n🔥 *Datos para pagar:* 🔥\n👤 Titular: Ruben Ich\n💜 Yape: 931 111 443\n💳 ID Binance: 1179968495\n\nMe confirmas cuando realices el pago porfas, ¡Gracias! ✨`;
   };
 
   const generarLinkWp = (grupo) => {
     const texto = generarTextoCobro(grupo);
-    const numLimpio = grupo.whatsapp.replace(/\D/g, ''); // Limpia símbolos
+    const numLimpio = grupo.whatsapp.replace(/\D/g, ''); 
     return `https://wa.me/${numLimpio}?text=${encodeURIComponent(texto)}`;
   };
 
   const copiarTextoWp = (grupo) => {
     navigator.clipboard.writeText(generarTextoCobro(grupo));
-    mostrarNotificacion('Texto copiado al portapapeles', 'success');
+    mostrarNotificacion('Mensaje de cobro copiado al portapapeles', 'success');
   };
+  // =====================================================================
 
   async function renovarCobranzaGrupo(cuentas) {
     try {
@@ -341,14 +341,17 @@ export default function App() {
     }
   }
 
-  // --- FUNCIÓN PARA "NO RENOVÓ" PARA GRUPOS (DASHBOARD) ---
   async function cancelarRenovacionGrupo(cuentas, nombreCli) {
     if (!confirm(`¿Estás seguro de que ${nombreCli} NO RENOVÓ?\nLas ${cuentas.length} cuenta(s) volverán al stock disponible.`)) return;
+
+    setCargando(true);
     try {
       const idsClientes = cuentas.map(c => c.id);
+
       for (let c of cuentas) {
         const regexCorreos = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
         const correos = c.cuenta.match(regexCorreos) || [];
+        
         for(let correo of correos) {
           const invMatch = inventario.find(i => (i.correo || '').toLowerCase().trim() === correo.toLowerCase().trim());
           if (invMatch) {
@@ -356,19 +359,20 @@ export default function App() {
           }
         }
       }
+
       const { error } = await supabase.from('clientes').delete().in('id', idsClientes);
       if (error) throw error;
+
       mostrarNotificacion(`Cuentas de ${nombreCli} liberadas al stock con éxito.`, 'success');
       cargarDatos(true);
     } catch (error) {
       mostrarNotificacion('Error al liberar cuentas: ' + error.message, 'error');
+      setCargando(false);
     }
   }
 
-  // --- FUNCIÓN PARA "NO RENOVÓ" PARA CLIENTE ÚNICO (VISTA FECHAS) ---
   async function cancelarRenovacionCliente(cliente) {
     if (!confirm(`¿Estás seguro de que ${cliente.nombre} NO RENOVÓ?\nSus cuentas volverán al stock y se eliminará el registro.`)) return;
-    // SIN setCargando PARA NO PERDER EL SCROLL
     try {
       const regexCorreos = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
       const correos = cliente.cuenta.match(regexCorreos) || [];
@@ -388,7 +392,6 @@ export default function App() {
     }
   }
 
-  // --- DESASIGNAR UNA SOLA CUENTA DESDE INVENTARIO ---
   async function desasignarCuentaUnica(item) {
     if (!confirm(`¿Estás seguro de DESASIGNAR la cuenta ${item.correo}?\nVolverá a estar "Disponible" en tu stock.`)) return;
     try {
@@ -410,7 +413,6 @@ export default function App() {
     }
   }
 
-  // --- REEMPLAZO INTELIGENTE DE CAÍDAS ---
   async function procesarReemplazos(e) {
     e.preventDefault();
     const regexCorreos = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
@@ -420,6 +422,7 @@ export default function App() {
       return mostrarNotificacion('Error: El formato debe contener pares exactos de correos (Antiguo y Nuevo).', 'error');
     }
 
+    setCargando(true);
     try {
       let reemplazados = 0;
       let noEncontrados = 0;
@@ -451,12 +454,15 @@ export default function App() {
       cargarDatos(true);
     } catch (error) {
       mostrarNotificacion('Error al procesar reemplazos: ' + error.message, 'error');
+    } finally {
+      setCargando(false);
     }
   }
 
-  // --- LIMPIEZA DE DUPLICADOS ---
   async function limpiarDuplicados() {
     if (!confirm('¿Estás seguro de limpiar los correos duplicados? El sistema conservará uno de cada correo y borrará los repetidos.')) return;
+    
+    setCargando(true);
     try {
       const { data, error } = await supabase.from('inventario').select('*');
       if (error) throw error;
@@ -481,7 +487,9 @@ export default function App() {
       });
 
       if (idsAEliminar.length === 0) {
-        return mostrarNotificacion('No se encontraron correos duplicados', 'success');
+        mostrarNotificacion('No se encontraron correos duplicados', 'success');
+        setCargando(false);
+        return;
       }
 
       for (let i = 0; i < idsAEliminar.length; i += 100) {
@@ -494,6 +502,8 @@ export default function App() {
       cargarDatos(true);
     } catch (err) {
       mostrarNotificacion('Error al limpiar duplicados: ' + err.message, 'error');
+    } finally {
+      setCargando(false);
     }
   }
 
@@ -579,7 +589,6 @@ export default function App() {
     setModalCli(true);
   }
 
-  // --- ASIGNACIÓN MULTIPLE INTELIGENTE ---
   async function guardarClienteNuevo(e) {
     e.preventDefault();
 
@@ -662,30 +671,6 @@ export default function App() {
     }
   }
 
-  async function eliminarClienteYLiberar(id, cuentaAsignada) {
-    if (!confirm('¿Eliminar cliente y liberar cuenta al stock?')) return;
-    try {
-      await supabase.from('clientes').delete().eq('id', id);
-
-      const regexCorreos = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
-      const correos = cuentaAsignada.match(regexCorreos) || [];
-      
-      for(let correo of correos) {
-        const invMatch = inventario.find(i => (i.correo || '').toLowerCase().trim() === correo.toLowerCase().trim());
-        if (invMatch) {
-          await supabase.from('inventario').update({ estado: 'Disponible', cliente_asignado: null }).eq('id', invMatch.id);
-        }
-      }
-      mostrarNotificacion('Cliente eliminado y cuenta liberada', 'success');
-      cargarDatos(true);
-    } catch (error) {
-      mostrarNotificacion('Error al eliminar: ' + error.message, 'error');
-    }
-  }
-
-  // =====================================================================
-  // 🔥 PANTALLA DE INICIO DE SESIÓN (ESTILO ANIME/OSCURO) 🔥
-  // =====================================================================
   if (!session) {
     return (
       <div 
@@ -757,7 +742,6 @@ export default function App() {
       </div>
     );
   }
-  // =====================================================================
 
   const numTc = parseFloat(tc) || 3.42;
 
@@ -775,7 +759,6 @@ export default function App() {
   const cuentasLibres = inventario.filter((i) => i.estado === 'Disponible' && (!i.cliente_asignado || i.cliente_asignado.trim() === ''));
   const libres = cuentasLibres.length;
 
-  // CÁLCULO FINANCIERO CORREGIDO (LEE ABSOLUTAMENTE TODOS LOS CORREOS DEL CLIENTE)
   let ingresosSoles = 0;
   clientes.forEach((cli) => {
     if ((cli.pago || '').trim() === 'Pagado') {
@@ -788,7 +771,6 @@ export default function App() {
         if (invItem && parseFloat(invItem.precio_venta) > 0) {
           ingresosSoles += parseFloat(invItem.precio_venta);
         } else {
-          // SALVAVIDAS: Si olvidaste ponerle precio al importar el lote, asume 35 soles por cuenta para que tu ganancia sea real.
           ingresosSoles += 35; 
         }
       });
@@ -807,19 +789,29 @@ export default function App() {
   const gananciaNeta = ingresosTotalesSoles - egresosVentasSoles;
   const capitalLibreSoles = capitalStockLibreUsdt * numTc;
 
-  const hoyStr = new Date().toISOString().split('T')[0];
+  // =====================================================================
+  // 🔥 LÓGICA DE FECHAS (HOY LOCAL A PRUEBA DE ZONAS HORARIAS) 🔥
+  // =====================================================================
+  const dHoy = new Date();
+  const yyyy = dHoy.getFullYear();
+  const mm = String(dHoy.getMonth() + 1).padStart(2, '0');
+  const dd = String(dHoy.getDate()).padStart(2, '0');
+  const hoyStr = `${yyyy}-${mm}-${dd}`;
 
-  const cuentasQueVencenHoyAgrupadas = agruparPorWhatsapp(clientes.filter((c) => c.fin === hoyStr));
+  const dManana = new Date();
+  dManana.setDate(dManana.getDate() + 1);
+  const mananaStr = `${dManana.getFullYear()}-${String(dManana.getMonth() + 1).padStart(2, '0')}-${String(dManana.getDate()).padStart(2, '0')}`;
+
+  // Atrapa a los que vencen HOY, y también a los que ya se pasaron de fecha y siguen como "Pagado" (para avisarles)
+  const cuentasQueVencenHoyAgrupadas = agruparPorWhatsapp(clientes.filter((c) => {
+    return c.pago === 'Pagado' && c.fin && c.fin <= hoyStr;
+  }));
+  
   const deudasPendientesAgrupadas = agruparPorWhatsapp(clientes.filter((c) => c.pago === 'Pendiente'));
   
-  const proximosVencimientosAgrupados = agruparPorWhatsapp(clientes.filter((cli) => {
-    const hoy = new Date();
-    const lim = new Date();
-    lim.setDate(hoy.getDate() + 3);
-    const arr = cli.fin ? cli.fin.split('-') : [];
-    if (arr.length !== 3) return false;
-    const d = new Date(arr[0], arr[1] - 1, arr[2]);
-    return d > hoy && d <= lim;
+  // Exclusivo para MAÑANA
+  const vencenMananaAgrupados = agruparPorWhatsapp(clientes.filter((c) => {
+    return c.pago === 'Pagado' && c.fin === mananaStr;
   }));
 
   const inventarioGestion = inventario.filter(
@@ -978,17 +970,22 @@ export default function App() {
 
                   <div className="p-7 rounded-3xl border border-[#3b0909] bg-gradient-to-r from-[#140a0a] via-[#0d0707] to-[#080404] space-y-5 shadow-2xl">
                     <h3 className="text-lg font-extrabold text-white flex items-center gap-2.5">
-                      <AlertCircle className="w-6 h-6 text-red-500" /> Cobranza - Vencen Hoy ({hoyStr})
+                      <AlertCircle className="w-6 h-6 text-red-500" /> Cobranza - Vencen Hoy o Atrasados
                     </h3>
                     {cuentasQueVencenHoyAgrupadas.length === 0 ? (
-                      <p className="text-neutral-400 text-sm font-medium">No hay cuentas que expiren exactamente hoy.</p>
+                      <p className="text-neutral-400 text-sm font-medium">Todos están al día con sus pagos o no hay vencimientos pendientes.</p>
                     ) : (
                       <div className="space-y-3">
                         {cuentasQueVencenHoyAgrupadas.map((grupo) => (
-                          <div key={grupo.whatsapp} className="flex flex-wrap justify-between items-center bg-[#0a0a0a] p-5 rounded-2xl border border-[#2b0d0d] gap-4 shadow-md">
+                          <div key={grupo.whatsapp} className="flex flex-wrap justify-between items-start md:items-center bg-[#0a0a0a] p-5 rounded-2xl border border-[#2b0d0d] gap-4 shadow-md">
                             <div>
                               <p className="font-bold text-white text-base">{grupo.nombre} <span className="text-xs text-neutral-400 font-normal">({grupo.whatsapp})</span></p>
                               <p className="text-xs text-red-400 font-mono mt-0.5">{grupo.cuentas.length} cuentas vencen hoy (Renovación: S/ {grupo.cuentas.length * 35})</p>
+                              <div className="mt-2 flex flex-col gap-1">
+                                {grupo.cuentas.map((c, i) => (
+                                  <span key={i} className="text-[11px] text-blue-300 font-mono bg-[#050505] border border-neutral-900 px-2.5 py-1 rounded-md w-fit">{c.cuenta.split(' (')[0].trim()}</span>
+                                ))}
+                              </div>
                             </div>
                             <div className="flex flex-wrap items-center gap-2 md:gap-3">
                               <button onClick={() => cancelarRenovacionGrupo(grupo.cuentas, grupo.nombre)} className="text-neutral-400 bg-neutral-900/50 border border-neutral-800 px-3.5 py-2 rounded-xl text-xs font-bold hover:bg-neutral-800 hover:text-white transition">No renovó</button>
@@ -1010,12 +1007,17 @@ export default function App() {
                           <p className="text-neutral-400 text-sm font-medium">Todos al día 🎉</p>
                         ) : (
                           deudasPendientesAgrupadas.map((grupo) => (
-                            <div key={grupo.whatsapp} className="flex justify-between items-center py-4 border-b border-neutral-900 text-sm gap-2">
+                            <div key={grupo.whatsapp} className="flex justify-between items-start sm:items-center py-4 border-b border-neutral-900 text-sm gap-2 flex-col sm:flex-row">
                               <div>
                                 <span className="font-bold text-gray-200 block">{grupo.nombre}</span>
                                 <span className="text-xs text-red-400 font-bold">{grupo.cuentas.length} cuentas (Deuda: S/ {grupo.cuentas.length * 35})</span>
+                                <div className="mt-1.5 flex flex-col gap-1">
+                                  {grupo.cuentas.map((c, i) => (
+                                    <span key={i} className="text-[10px] text-blue-300 font-mono bg-[#050505] border border-neutral-900 px-2 py-0.5 rounded-md w-fit">{c.cuenta.split(' (')[0].trim()}</span>
+                                  ))}
+                                </div>
                               </div>
-                              <div className="flex flex-col sm:flex-row items-end sm:items-center gap-2">
+                              <div className="flex flex-wrap sm:flex-row items-center gap-2 mt-2 sm:mt-0">
                                 <button onClick={() => cancelarRenovacionGrupo(grupo.cuentas, grupo.nombre)} className="text-neutral-400 bg-neutral-900/50 border border-neutral-800 px-3.5 py-1.5 rounded-xl text-xs font-bold hover:bg-neutral-800 transition" title="Liberar cuenta al stock">No renovó</button>
                                 <button onClick={() => copiarTextoWp(grupo)} className="text-neutral-300 bg-neutral-800/80 border border-neutral-700 px-3.5 py-1.5 rounded-xl text-xs font-bold hover:bg-neutral-700 transition">Copiar Txt</button>
                                 <button onClick={() => marcarComoPagadoGrupo(grupo.cuentas)} className="text-green-400 bg-green-950/40 border border-green-900/50 px-3.5 py-1.5 rounded-xl text-xs font-bold hover:bg-green-900/40 transition">✓ Pagó</button>
@@ -1028,19 +1030,24 @@ export default function App() {
                     </div>
 
                     <div className="p-7 rounded-3xl border border-[#2b0d0d] bg-[#0d0d0d] space-y-4 shadow-xl">
-                      <h3 className="text-base font-extrabold text-amber-500 flex items-center gap-2"><Clock className="w-5 h-5" /> Vencen próximos 3 días</h3>
+                      <h3 className="text-base font-extrabold text-amber-500 flex items-center gap-2"><Clock className="w-5 h-5" /> Vencen Mañana ({mananaStr})</h3>
                       <div className="space-y-2">
-                        {proximosVencimientosAgrupados.length === 0 ? (
-                          <p className="text-neutral-400 text-sm font-medium">Sin vencimientos cercanos.</p>
+                        {vencenMananaAgrupados.length === 0 ? (
+                          <p className="text-neutral-400 text-sm font-medium">Nadie vence exactamente el día de mañana.</p>
                         ) : (
-                          proximosVencimientosAgrupados.map((grupo) => (
-                            <div key={grupo.whatsapp} className="flex justify-between items-center py-4 border-b border-neutral-900 text-sm">
+                          vencenMananaAgrupados.map((grupo) => (
+                            <div key={grupo.whatsapp} className="flex justify-between items-start sm:items-center py-4 border-b border-neutral-900 text-sm flex-col sm:flex-row gap-2">
                               <div>
                                 <span className="font-bold text-gray-200 block">{grupo.nombre}</span>
                                 <span className="text-xs text-neutral-400 font-medium">{grupo.cuentas.length} cuentas por vencer</span>
+                                <div className="mt-1.5 flex flex-col gap-1">
+                                  {grupo.cuentas.map((c, i) => (
+                                    <span key={i} className="text-[10px] text-blue-300 font-mono bg-[#050505] border border-neutral-900 px-2 py-0.5 rounded-md w-fit">{c.cuenta.split(' (')[0].trim()}</span>
+                                  ))}
+                                </div>
                               </div>
-                              <div className="flex flex-col sm:flex-row items-end sm:items-center gap-2">
-                                <span className="text-amber-400 font-extrabold text-xs bg-amber-500/10 px-2.5 py-1 rounded-lg border border-amber-500/20">{grupo.cuentas[0].fin}</span>
+                              <div className="flex flex-wrap sm:flex-row items-center gap-2 mt-2 sm:mt-0">
+                                <span className="text-amber-400 font-extrabold text-xs bg-amber-500/10 px-2.5 py-1.5 rounded-xl border border-amber-500/20">{grupo.cuentas[0].fin}</span>
                                 <button onClick={() => copiarTextoWp(grupo)} className="text-neutral-300 bg-neutral-800/80 border border-neutral-700 px-3.5 py-1.5 rounded-xl text-xs font-bold hover:bg-neutral-700 transition">Copiar Txt</button>
                                 <a href={generarLinkWp(grupo)} target="_blank" rel="noreferrer" className="text-red-400 bg-red-950/40 border border-red-900/50 px-3.5 py-1.5 rounded-xl text-xs font-bold hover:bg-red-900/40 transition">Abrir Wp</a>
                               </div>
@@ -1053,7 +1060,7 @@ export default function App() {
                 </div>
               )}
 
-              {/* NUEVA VISTA: FECHAS Y VENCIMIENTOS AGRUPADOS */}
+              {/* VISTA FECHAS */}
               {vista === 'fechas' && (
                 <div className="space-y-6 animate-fade-in">
                   <div className="p-5 rounded-3xl border border-[#2b0d0d] bg-[#0d0d0d] flex flex-col md:flex-row justify-between items-center shadow-xl gap-4">
@@ -1067,7 +1074,6 @@ export default function App() {
 
                   <div className="space-y-6">
                     {(() => {
-                      // Agrupar clientes por día del mes
                       const gruposPorDia = {};
                       for (let i = 1; i <= 31; i++) gruposPorDia[i] = [];
                       
@@ -1087,7 +1093,6 @@ export default function App() {
                       }
 
                       return diasRenderizados.map(dia => {
-                        // ORDEN ALFABÉTICO DENTRO DEL DÍA
                         const lista = gruposPorDia[dia].sort((a, b) => a.nombre.localeCompare(b.nombre));
                         
                         return (
@@ -1126,12 +1131,10 @@ export default function App() {
                                         {difDias < 0 ? `Vencido (${Math.abs(difDias)} d)` : difDias === 0 ? '¡Vence Hoy!' : `Faltan ${difDias} días`}
                                       </span>
                                       
-                                      {/* BOTÓN NO RENOVÓ (LIBERAR) */}
                                       <button onClick={() => cancelarRenovacionCliente(c)} className="p-2.5 bg-neutral-800 hover:bg-red-900/40 text-red-400 rounded-xl transition border border-neutral-700 hover:border-red-900/50 shadow-sm" title="No renovó (Liberar Cuentas y Eliminar)">
                                         <UserMinus className="w-4 h-4" />
                                       </button>
                                       
-                                      {/* BOTÓN EDITAR */}
                                       <button onClick={() => abrirEditarCliente(c)} className="p-2.5 bg-neutral-800 hover:bg-blue-900/40 text-blue-400 rounded-xl transition border border-neutral-700 hover:border-blue-900/50 shadow-sm" title="Editar Cliente">
                                         <Edit className="w-4 h-4" />
                                       </button>
@@ -1186,6 +1189,7 @@ export default function App() {
                 </div>
               )}
 
+              {/* VISTA INVENTARIO */}
               {vista === 'inventario' && (
                 <div className="rounded-3xl overflow-hidden animate-fade-in border border-[#2b0d0d] bg-[#0d0d0d] shadow-2xl">
                   <div className="p-5 border-b border-[#2b0d0d] flex flex-col md:flex-row justify-between items-center bg-[#140a0a] gap-4">
@@ -1254,6 +1258,7 @@ export default function App() {
                 </div>
               )}
 
+              {/* VISTA CLIENTES */}
               {vista === 'clientes' && (
                 <div className="rounded-3xl overflow-hidden animate-fade-in border border-[#2b0d0d] bg-[#0d0d0d] shadow-2xl">
                   <div className="p-5 border-b border-[#2b0d0d] flex flex-col md:flex-row justify-between items-center bg-[#140a0a] gap-4">
