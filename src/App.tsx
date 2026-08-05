@@ -25,7 +25,10 @@ import {
   PieChart,
   Sparkles,
   Upload,
-  UserPlus
+  UserPlus,
+  UserMinus,
+  CalendarDays,
+  Edit
 } from 'lucide-react';
 
 export default function App() {
@@ -185,6 +188,10 @@ export default function App() {
   const [modalReemplazo, setModalReemplazo] = useState(() => localStorage.getItem('alu_modalReemplazo') === 'true');
   const [textoReemplazo, setTextoReemplazo] = useState(() => localStorage.getItem('alu_textoReemplazo') || '');
 
+  // Modal y estado para EDITAR CLIENTES
+  const [modalEditarCli, setModalEditarCli] = useState(false);
+  const [clienteEditando, setClienteEditando] = useState(null);
+
   useEffect(() => {
     localStorage.setItem('alu_modalCli', modalCli);
     localStorage.setItem('alu_cliNom', cliNom);
@@ -213,6 +220,37 @@ export default function App() {
   function cerrarModalReemplazo() {
     setModalReemplazo(false);
     setTextoReemplazo('');
+  }
+
+  function abrirEditarCliente(cli) {
+    setClienteEditando(cli);
+    setCliNom(cli.nombre);
+    setCliNum(cli.whatsapp);
+    setCliInicio(cli.inicio || '');
+    setCliFin(cli.fin || '');
+    setModalEditarCli(true);
+  }
+
+  async function guardarEdicionCliente(e) {
+    e.preventDefault();
+    setCargando(true);
+    try {
+      const { error } = await supabase
+        .from('clientes')
+        .update({ nombre: cliNom, whatsapp: cliNum, inicio: cliInicio, fin: cliFin })
+        .eq('id', clienteEditando.id);
+      
+      if (error) throw error;
+      
+      mostrarNotificacion('Datos del cliente actualizados con éxito', 'success');
+      setModalEditarCli(false);
+      setClienteEditando(null);
+      cerrarModalCli(); // Limpia los campos
+      cargarDatos(true);
+    } catch (error) {
+      mostrarNotificacion('Error al editar: ' + error.message, 'error');
+      setCargando(false);
+    }
   }
   // =====================================================================
 
@@ -257,11 +295,22 @@ export default function App() {
     return Object.values(map);
   }
 
-  const generarLinkWp = (grupo) => {
+  // --- ENLACE LIMPIO DE WSP Y COPIADO DE TEXTO ---
+  const generarTextoCobro = (grupo) => {
     const correosStr = grupo.cuentas.map(c => c.cuenta.split(' (')[0].trim()).join(', ');
     const montoTotal = grupo.cuentas.length * 35;
-    const texto = `Hola ${grupo.nombre}, tienes un pago pendiente de: ${correosStr}. El total de la renovación es S/ ${montoTotal} al Yape 931111443 a nombre de Ruben Ich.`;
-    return `https://wa.me/${grupo.whatsapp}?text=${encodeURIComponent(texto)}`;
+    return `Hola ${grupo.nombre}, tienes un pago pendiente de: ${correosStr}. El total de la renovación es S/ ${montoTotal} al Yape 931111443 a nombre de Ruben Ich.`;
+  };
+
+  const generarLinkWp = (grupo) => {
+    const texto = generarTextoCobro(grupo);
+    const numLimpio = grupo.whatsapp.replace(/\D/g, ''); // Limpia símbolos
+    return `https://wa.me/${numLimpio}?text=${encodeURIComponent(texto)}`;
+  };
+
+  const copiarTextoWp = (grupo) => {
+    navigator.clipboard.writeText(generarTextoCobro(grupo));
+    mostrarNotificacion('Texto copiado al portapapeles', 'success');
   };
 
   async function renovarCobranzaGrupo(cuentas) {
@@ -293,7 +342,7 @@ export default function App() {
     }
   }
 
-  // --- NUEVO: FUNCIÓN PARA "NO RENOVÓ" (CANCELA Y LIBERA CUENTAS) ---
+  // --- FUNCIÓN PARA "NO RENOVÓ" (CANCELA Y LIBERA CUENTAS) ---
   async function cancelarRenovacionGrupo(cuentas, nombreCli) {
     if (!confirm(`¿Estás seguro de que ${nombreCli} NO RENOVÓ?\nLas ${cuentas.length} cuenta(s) volverán al stock disponible.`)) return;
 
@@ -301,20 +350,18 @@ export default function App() {
     try {
       const idsClientes = cuentas.map(c => c.id);
 
-      // 1. Encontrar esas cuentas en el inventario y marcarlas como disponibles
       for (let c of cuentas) {
-        const correoLimpio = c.cuenta.split(' (')[0].trim().toLowerCase();
-        const invMatch = inventario.find(i => (i.correo || '').toLowerCase().trim() === correoLimpio);
+        const regexCorreos = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
+        const correos = c.cuenta.match(regexCorreos) || [];
         
-        if (invMatch) {
-          await supabase
-            .from('inventario')
-            .update({ estado: 'Disponible', cliente_asignado: null })
-            .eq('id', invMatch.id);
+        for(let correo of correos) {
+          const invMatch = inventario.find(i => (i.correo || '').toLowerCase().trim() === correo.toLowerCase().trim());
+          if (invMatch) {
+            await supabase.from('inventario').update({ estado: 'Disponible', cliente_asignado: null }).eq('id', invMatch.id);
+          }
         }
       }
 
-      // 2. Borrar la deuda/registros de la tabla de clientes
       const { error } = await supabase.from('clientes').delete().in('id', idsClientes);
       if (error) throw error;
 
@@ -322,6 +369,33 @@ export default function App() {
       cargarDatos(true);
     } catch (error) {
       mostrarNotificacion('Error al liberar cuentas: ' + error.message, 'error');
+      setCargando(false);
+    }
+  }
+
+  // --- DESASIGNAR UNA SOLA CUENTA DESDE INVENTARIO ---
+  async function desasignarCuentaUnica(item) {
+    if (!confirm(`¿Estás seguro de DESASIGNAR la cuenta ${item.correo}?\nVolverá a estar "Disponible" en tu stock.`)) return;
+    
+    setCargando(true);
+    try {
+      await supabase.from('inventario').update({ estado: 'Disponible', cliente_asignado: null }).eq('id', item.id);
+      
+      const cliMatch = clientes.find(c => (c.cuenta || '').toLowerCase().includes(item.correo.toLowerCase()));
+      if (cliMatch) {
+        const regex = new RegExp(`${item.correo}[^,]*`, 'gi');
+        let nuevaCuenta = cliMatch.cuenta.replace(regex, '').replace(/,\s*,/g, ',').replace(/^,|,$/g, '').trim();
+        
+        if (nuevaCuenta === '') {
+          await supabase.from('clientes').delete().eq('id', cliMatch.id);
+        } else {
+          await supabase.from('clientes').update({ cuenta: nuevaCuenta }).eq('id', cliMatch.id);
+        }
+      }
+      mostrarNotificacion('Cuenta desasignada correctamente', 'success');
+      cargarDatos(true);
+    } catch (error) {
+      mostrarNotificacion('Error al desasignar: ' + error.message, 'error');
       setCargando(false);
     }
   }
@@ -593,13 +667,14 @@ export default function App() {
     try {
       await supabase.from('clientes').delete().eq('id', id);
 
-      const correoLimpio = cuentaAsignada.split(' (')[0].trim();
-      const invMatch = inventario.find((i) => i.correo.trim() === correoLimpio);
-      if (invMatch) {
-        await supabase
-          .from('inventario')
-          .update({ estado: 'Disponible', cliente_asignado: null }) 
-          .eq('id', invMatch.id);
+      const regexCorreos = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
+      const correos = cuentaAsignada.match(regexCorreos) || [];
+      
+      for(let correo of correos) {
+        const invMatch = inventario.find(i => (i.correo || '').toLowerCase().trim() === correo.toLowerCase().trim());
+        if (invMatch) {
+          await supabase.from('inventario').update({ estado: 'Disponible', cliente_asignado: null }).eq('id', invMatch.id);
+        }
       }
       mostrarNotificacion('Cliente eliminado y cuenta liberada', 'success');
       cargarDatos(true);
@@ -686,6 +761,7 @@ export default function App() {
 
   const numTc = parseFloat(tc) || 3.42;
 
+  // --- CÁLCULO FINANCIERO EXPERTO Y A PRUEBA DE FALLOS ---
   let costoStockVendidoUsdt = 0;
   let capitalStockLibreUsdt = 0;
 
@@ -702,12 +778,21 @@ export default function App() {
 
   let ingresosSoles = 0;
   clientes.forEach((cli) => {
-    if (cli.pago === 'Pagado') {
-      const correoBase = cli.cuenta ? cli.cuenta.split(' (')[0].trim().toLowerCase() : '';
-      const invItem = inventario.find((i) => (i.correo || '').toLowerCase() === correoBase);
-      if (invItem) {
-        ingresosSoles += parseFloat(invItem.precio_venta) || 0;
-      }
+    if ((cli.pago || '').trim() === 'Pagado') {
+      // Extraemos todos los correos que tiene este cliente en su texto
+      const regexCorreos = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
+      const correosEnCliente = cli.cuenta.match(regexCorreos) || [];
+      
+      correosEnCliente.forEach(correoCli => {
+        const invItem = inventario.find((i) => (i.correo || '').toLowerCase().trim() === correoCli.toLowerCase().trim());
+        
+        if (invItem && parseFloat(invItem.precio_venta) > 0) {
+          ingresosSoles += parseFloat(invItem.precio_venta);
+        } else {
+          // SALVAVIDAS: Si olvidaste ponerle precio al importar el lote, asume 35 soles por cuenta para que tu ganancia sea real.
+          ingresosSoles += 35; 
+        }
+      });
     }
   });
 
@@ -803,7 +888,8 @@ export default function App() {
             <BotonesMenu icono={<Zap className="text-red-500" />} texto="Ventas Rápidas" vista="ventas" vistaActual={vista} setVista={setVista} />
             <BotonesMenu icono={<Package />} texto="Inventario" vista="inventario" vistaActual={vista} setVista={setVista} />
             <BotonesMenu icono={<Users />} texto="Clientes" vista="clientes" vistaActual={vista} setVista={setVista} />
-            <BotonesMenu icono={<DollarSign className="text-red-400" />} texto="Gestión de Cuentas" vista="gestion" vistaActual={vista} setVista={setVista} />
+            <BotonesMenu icono={<CalendarDays className="text-blue-400" />} texto="Fechas de Correos" vista="fechas" vistaActual={vista} setVista={setVista} />
+            <BotonesMenu icono={<DollarSign className="text-green-500" />} texto="Gestión de Cuentas" vista="gestion" vistaActual={vista} setVista={setVista} />
             <BotonesMenu icono={<PieChart className="text-amber-500" />} texto="Control de Gastos" vista="gastos" vistaActual={vista} setVista={setVista} />
           </nav>
         </div>
@@ -820,7 +906,7 @@ export default function App() {
         <BotonMobile icono={<Zap className="w-5 h-5 text-red-500" />} texto="Ventas" vista="ventas" vistaActual={vista} setVista={setVista} />
         <BotonMobile icono={<Package className="w-5 h-5" />} texto="Stock" vista="inventario" vistaActual={vista} setVista={setVista} />
         <BotonMobile icono={<Users className="w-5 h-5" />} texto="Clientes" vista="clientes" vistaActual={vista} setVista={setVista} />
-        <BotonMobile icono={<DollarSign className="w-5 h-5 text-red-400" />} texto="Cuentas" vista="gestion" vistaActual={vista} setVista={setVista} />
+        <BotonMobile icono={<CalendarDays className="w-5 h-5 text-blue-400" />} texto="Fechas" vista="fechas" vistaActual={vista} setVista={setVista} />
         <BotonMobile icono={<PieChart className="w-5 h-5 text-amber-500" />} texto="Gastos" vista="gastos" vistaActual={vista} setVista={setVista} />
       </nav>
 
@@ -833,7 +919,7 @@ export default function App() {
             </button>
             <h1 className="text-lg md:text-xl font-bold tracking-tight text-white capitalize flex items-center gap-2">
               <span className="w-2 h-2 rounded-full bg-red-600"></span>
-              {vista === 'clientes' ? 'Clientes' : vista === 'ventas' ? 'Ventas Rápidas' : vista === 'inventario' ? 'Inventario' : vista === 'gestion' ? 'Gestión de Cuentas' : vista === 'gastos' ? 'Control de Gastos' : 'Dashboard Financiero'}
+              {vista === 'clientes' ? 'Clientes' : vista === 'ventas' ? 'Ventas Rápidas' : vista === 'inventario' ? 'Inventario' : vista === 'gestion' ? 'Gestión de Cuentas' : vista === 'fechas' ? 'Fechas y Vencimientos' : vista === 'gastos' ? 'Control de Gastos' : 'Dashboard Financiero'}
             </h1>
           </div>
           <div className="bg-[#141414] border border-[#3b0909] px-4 py-1.5 rounded-2xl flex items-center gap-2.5 shadow-lg shadow-red-950/20">
@@ -907,7 +993,8 @@ export default function App() {
                             </div>
                             <div className="flex flex-wrap items-center gap-2 md:gap-3">
                               <button onClick={() => cancelarRenovacionGrupo(grupo.cuentas, grupo.nombre)} className="text-neutral-400 bg-neutral-900/50 border border-neutral-800 px-3.5 py-2 rounded-xl text-xs font-bold hover:bg-neutral-800 hover:text-white transition">No renovó</button>
-                              <a href={generarLinkWp(grupo)} target="_blank" rel="noreferrer" className="bg-[#1f0a0a] hover:bg-[#331111] text-red-300 border border-red-900/40 px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-sm">Cobrar Wp</a>
+                              <button onClick={() => copiarTextoWp(grupo)} className="bg-neutral-800 hover:bg-neutral-700 text-neutral-300 border border-neutral-700 px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-sm"><Copy className="w-3.5 h-3.5" /> Copiar Txt</button>
+                              <a href={generarLinkWp(grupo)} target="_blank" rel="noreferrer" className="bg-[#1f0a0a] hover:bg-[#331111] text-red-300 border border-red-900/40 px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-sm">Abrir Wp</a>
                               <button onClick={() => renovarCobranzaGrupo(grupo.cuentas)} className="bg-gradient-to-r from-[#800f11] to-red-600 hover:from-red-700 hover:to-red-500 text-white px-5 py-2 rounded-xl text-xs font-bold transition shadow-md shadow-red-950 flex items-center gap-1.5"><RefreshCw className="w-3.5 h-3.5" /> Renovar Todo</button>
                             </div>
                           </div>
@@ -931,8 +1018,9 @@ export default function App() {
                               </div>
                               <div className="flex flex-col sm:flex-row items-end sm:items-center gap-2">
                                 <button onClick={() => cancelarRenovacionGrupo(grupo.cuentas, grupo.nombre)} className="text-neutral-400 bg-neutral-900/50 border border-neutral-800 px-3.5 py-1.5 rounded-xl text-xs font-bold hover:bg-neutral-800 transition" title="Liberar cuenta al stock">No renovó</button>
+                                <button onClick={() => copiarTextoWp(grupo)} className="text-neutral-300 bg-neutral-800/80 border border-neutral-700 px-3.5 py-1.5 rounded-xl text-xs font-bold hover:bg-neutral-700 transition">Copiar Txt</button>
                                 <button onClick={() => marcarComoPagadoGrupo(grupo.cuentas)} className="text-green-400 bg-green-950/40 border border-green-900/50 px-3.5 py-1.5 rounded-xl text-xs font-bold hover:bg-green-900/40 transition">✓ Pagó</button>
-                                <a href={generarLinkWp(grupo)} target="_blank" rel="noreferrer" className="text-red-400 bg-red-950/40 border border-red-900/50 px-3.5 py-1.5 rounded-xl text-xs font-bold hover:bg-red-900/40 transition">Cobrar Wp</a>
+                                <a href={generarLinkWp(grupo)} target="_blank" rel="noreferrer" className="text-red-400 bg-red-950/40 border border-red-900/50 px-3.5 py-1.5 rounded-xl text-xs font-bold hover:bg-red-900/40 transition">Abrir Wp</a>
                               </div>
                             </div>
                           ))
@@ -954,13 +1042,100 @@ export default function App() {
                               </div>
                               <div className="flex flex-col sm:flex-row items-end sm:items-center gap-2">
                                 <span className="text-amber-400 font-extrabold text-xs bg-amber-500/10 px-2.5 py-1 rounded-lg border border-amber-500/20">{grupo.cuentas[0].fin}</span>
-                                <a href={generarLinkWp(grupo)} target="_blank" rel="noreferrer" className="text-red-400 bg-red-950/40 border border-red-900/50 px-3.5 py-1.5 rounded-xl text-xs font-bold hover:bg-red-900/40 transition">Avisar Wp</a>
+                                <button onClick={() => copiarTextoWp(grupo)} className="text-neutral-300 bg-neutral-800/80 border border-neutral-700 px-3.5 py-1.5 rounded-xl text-xs font-bold hover:bg-neutral-700 transition">Copiar Txt</button>
+                                <a href={generarLinkWp(grupo)} target="_blank" rel="noreferrer" className="text-red-400 bg-red-950/40 border border-red-900/50 px-3.5 py-1.5 rounded-xl text-xs font-bold hover:bg-red-900/40 transition">Abrir Wp</a>
                               </div>
                             </div>
                           ))
                         )}
                       </div>
                     </div>
+                  </div>
+                </div>
+              )}
+
+              {/* NUEVA VISTA: FECHAS Y VENCIMIENTOS AGRUPADOS */}
+              {vista === 'fechas' && (
+                <div className="space-y-6 animate-fade-in">
+                  <div className="p-5 rounded-3xl border border-[#2b0d0d] bg-[#0d0d0d] flex flex-col md:flex-row justify-between items-center shadow-xl gap-4">
+                    <h2 className="text-lg font-bold text-white flex items-center gap-2">
+                      <CalendarDays className="w-5 h-5 text-blue-400" /> Calendario de Vencimientos
+                    </h2>
+                    <span className="text-xs font-semibold text-neutral-400 bg-[#140a0a] px-4 py-2 rounded-xl border border-[#2b0d0d]">
+                      Cuentas Activas: <strong className="text-white">{clientes.length}</strong>
+                    </span>
+                  </div>
+
+                  <div className="space-y-6">
+                    {(() => {
+                      // Agrupar clientes por día del mes
+                      const gruposPorDia = {};
+                      for (let i = 1; i <= 31; i++) gruposPorDia[i] = [];
+                      
+                      clientes.forEach(c => {
+                        if (c.fin) {
+                          const dia = parseInt(c.fin.split('-')[2], 10);
+                          if (!isNaN(dia) && dia >= 1 && dia <= 31) {
+                            gruposPorDia[dia].push(c);
+                          }
+                        }
+                      });
+
+                      const diasRenderizados = Object.keys(gruposPorDia).filter(dia => gruposPorDia[dia].length > 0);
+
+                      if (diasRenderizados.length === 0) {
+                        return <div className="text-center py-16 text-neutral-400 p-8 rounded-3xl border border-[#2b0d0d] bg-[#0d0d0d]">No hay clientes con fechas asignadas.</div>;
+                      }
+
+                      return diasRenderizados.map(dia => {
+                        const lista = gruposPorDia[dia];
+                        return (
+                          <div key={dia} className="rounded-3xl border border-[#2b0d0d] bg-[#0d0d0d] overflow-hidden shadow-2xl">
+                            <div className="bg-gradient-to-r from-[#140a0a] to-[#0a0505] border-b border-[#2b0d0d] px-6 py-4 flex items-center gap-4">
+                              <div className="w-10 h-10 rounded-2xl bg-blue-500/10 flex items-center justify-center border border-blue-500/20 shadow-inner">
+                                <span className="text-blue-400 font-extrabold text-lg">{String(dia).padStart(2, '0')}</span>
+                              </div>
+                              <h3 className="text-white font-bold text-base tracking-wide">Vencen los días {dia}</h3>
+                              <span className="ml-auto text-xs font-bold text-neutral-500 bg-neutral-900 px-3 py-1 rounded-full">{lista.length} Clientes</span>
+                            </div>
+                            <div className="divide-y divide-neutral-900">
+                              {lista.map(c => {
+                                const hoy = new Date();
+                                hoy.setHours(0,0,0,0);
+                                const arrFin = c.fin ? c.fin.split('-') : [];
+                                const dFin = arrFin.length === 3 ? new Date(arrFin[0], arrFin[1] - 1, arrFin[2]) : new Date();
+                                const difDias = Math.ceil((dFin.getTime() - hoy.getTime()) / (1000 * 60 * 60 * 24));
+                                
+                                let colorDias = 'text-green-400 bg-green-500/10 border-green-500/20';
+                                if (difDias < 0) colorDias = 'text-red-500 bg-red-500/10 border-red-500/20';
+                                else if (difDias <= 3) colorDias = 'text-amber-400 bg-amber-500/10 border-amber-500/20';
+
+                                return (
+                                  <div key={c.id} className="p-5 flex flex-col md:flex-row justify-between md:items-center gap-4 hover:bg-neutral-900/40 transition">
+                                    <div>
+                                      <p className="font-bold text-white text-base">{c.nombre} <span className="text-xs text-neutral-400 font-normal">({c.whatsapp})</span></p>
+                                      <p className="text-xs text-blue-300 font-mono mt-1 whitespace-pre-wrap leading-relaxed bg-[#050505] p-2 rounded-lg border border-neutral-900">{c.cuenta.replace(/,\s*/g, '\n')}</p>
+                                    </div>
+                                    <div className="flex flex-wrap items-center gap-4">
+                                      <div className="text-right">
+                                        <p className="text-xs text-neutral-500 font-medium">Inicio: {c.inicio || '-'}</p>
+                                        <p className="text-sm font-bold text-neutral-200">Vence: {c.fin}</p>
+                                      </div>
+                                      <span className={`px-3 py-1.5 rounded-xl text-xs font-bold border ${colorDias}`}>
+                                        {difDias < 0 ? `Vencido (${Math.abs(difDias)} d)` : difDias === 0 ? '¡Vence Hoy!' : `Faltan ${difDias} días`}
+                                      </span>
+                                      <button onClick={() => abrirEditarCliente(c)} className="p-2.5 bg-neutral-800 hover:bg-blue-900/40 text-blue-400 rounded-xl transition border border-neutral-700 hover:border-blue-900/50 shadow-sm" title="Editar Cliente">
+                                        <Edit className="w-4 h-4" />
+                                      </button>
+                                    </div>
+                                  </div>
+                                )
+                              })}
+                            </div>
+                          </div>
+                        )
+                      });
+                    })()}
                   </div>
                 </div>
               )}
@@ -1055,6 +1230,11 @@ export default function App() {
                                     <UserPlus className="w-4 h-4" />
                                   </button>
                                 )}
+                                {item.estado === 'Asignada' && (
+                                  <button onClick={() => desasignarCuentaUnica(item)} className="p-2.5 bg-amber-900/40 hover:bg-amber-600/40 text-amber-400 rounded-xl transition border border-amber-900/30 shadow-sm" title="Desasignar y liberar cuenta">
+                                    <UserMinus className="w-4 h-4" />
+                                  </button>
+                                )}
                                 <button onClick={() => eliminarCuentaInv(item.id, item.correo)} className="p-2.5 bg-red-950/40 hover:bg-red-900/40 text-red-400 rounded-xl transition border border-red-900/30 shadow-sm" title="Eliminar"><Trash2 className="w-4 h-4" /></button>
                               </td>
                             </tr>
@@ -1099,10 +1279,13 @@ export default function App() {
                             clientesFiltrados.map((c) => (
                               <tr key={c.id} className="hover:bg-neutral-900/40 transition">
                                 <td className="px-6 py-4 font-bold text-white">{c.nombre}<span className="block text-xs text-neutral-400 font-normal">{c.whatsapp}</span></td>
-                                <td className="px-6 py-4 font-mono text-xs text-red-400">{c.cuenta}</td>
+                                <td className="px-6 py-4 font-mono text-xs text-red-400 whitespace-pre-wrap">{c.cuenta.replace(/,\s*/g, '\n')}</td>
                                 <td className="px-6 py-4 text-neutral-200 font-semibold">{c.fin}</td>
                                 <td className="px-6 py-4"><span className={`px-3 py-1 rounded-full text-xs font-bold ${c.pago === 'Pendiente' ? 'bg-red-500/10 text-red-500 border border-red-500/20' : 'bg-neutral-800 text-neutral-300 border border-neutral-700'}`}>{c.pago}</span></td>
-                                <td className="px-6 py-4 text-center"><button onClick={() => eliminarClienteYLiberar(c.id, c.cuenta)} className="p-2.5 bg-red-950/40 hover:bg-red-900/40 text-red-400 rounded-xl transition border border-red-900/30 shadow-sm" title="Eliminar y Liberar"><Trash2 className="w-4 h-4" /></button></td>
+                                <td className="px-6 py-4 text-center flex justify-center gap-2">
+                                  <button onClick={() => abrirEditarCliente(c)} className="p-2.5 bg-neutral-800 hover:bg-blue-900/40 text-blue-400 rounded-xl transition border border-neutral-700 hover:border-blue-900/50 shadow-sm" title="Editar Cliente"><Edit className="w-4 h-4" /></button>
+                                  <button onClick={() => eliminarClienteYLiberar(c.id, c.cuenta)} className="p-2.5 bg-red-950/40 hover:bg-red-900/40 text-red-400 rounded-xl transition border border-red-900/30 shadow-sm" title="Eliminar y Liberar Cuentas"><Trash2 className="w-4 h-4" /></button>
+                                </td>
                               </tr>
                             ))
                           )}
@@ -1125,9 +1308,17 @@ export default function App() {
                             clientes.forEach((cli) => {
                               if (!ltv[cli.whatsapp]) ltv[cli.whatsapp] = { nom: cli.nombre, w: cli.whatsapp, numCuentas: 0, aporte: 0 };
                               ltv[cli.whatsapp].numCuentas++;
-                              const correoBase = cli.cuenta ? cli.cuenta.split(' (')[0].trim() : '';
-                              const invMatch = inventario.find((it) => it.correo.trim().toLowerCase() === correoBase.toLowerCase());
-                              if (invMatch) ltv[cli.whatsapp].aporte += parseFloat(invMatch.precio_venta) || 0;
+                              
+                              const regexCorreos = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
+                              const correos = cli.cuenta.match(regexCorreos) || [];
+                              correos.forEach(correo => {
+                                const invMatch = inventario.find((it) => (it.correo || '').trim().toLowerCase() === correo.toLowerCase().trim());
+                                if (invMatch && parseFloat(invMatch.precio_venta) > 0) {
+                                  ltv[cli.whatsapp].aporte += parseFloat(invMatch.precio_venta);
+                                } else {
+                                  ltv[cli.whatsapp].aporte += 35; // Fallback
+                                }
+                              });
                             });
                             const top = Object.values(ltv).sort((a, b) => b.aporte - a.aporte);
                             if (top.length === 0) return <tr><td colSpan="3" className="text-center py-12 text-neutral-500 font-medium">Sin datos para LTV</td></tr>;
@@ -1178,8 +1369,15 @@ export default function App() {
                               <td className="px-6 py-4 font-bold text-white">{item.correo}</td>
                               <td className="px-6 py-4 text-neutral-400">{item.proveedor}</td>
                               <td className="px-6 py-4 text-neutral-300 font-mono">${item.costo}</td>
-                              <td className="px-6 py-4 text-center space-x-3">
-                                <button onClick={() => sacarDelStock(item.id, item.correo)} className="px-4 py-2 bg-neutral-800 hover:bg-neutral-700 text-red-400 border border-neutral-700 rounded-xl text-xs font-bold transition shadow-sm">Eliminar del Stock Definitivo</button>
+                              <td className="px-6 py-4 text-center space-x-3 flex items-center justify-center gap-2">
+                                {item.estado === 'Asignada' && (
+                                  <button onClick={() => desasignarCuentaUnica(item)} className="px-3 py-2 bg-amber-900/40 hover:bg-amber-600/40 text-amber-400 border border-amber-900/30 rounded-xl text-xs font-bold transition shadow-sm flex items-center gap-1.5" title="Desasignar Cliente">
+                                    <UserMinus className="w-3.5 h-3.5" /> Desasignar
+                                  </button>
+                                )}
+                                <button onClick={() => sacarDelStock(item.id, item.correo)} className="px-4 py-2 bg-neutral-800 hover:bg-neutral-700 text-red-400 border border-neutral-700 rounded-xl text-xs font-bold transition shadow-sm flex items-center gap-1.5">
+                                  <Trash2 className="w-3.5 h-3.5" /> Eliminar
+                                </button>
                               </td>
                             </tr>
                           ))
@@ -1252,8 +1450,8 @@ export default function App() {
                   <input type="number" step="0.01" required value={loteCosto} onChange={(e) => setLoteCosto(e.target.value)} placeholder="0.00" className="w-full bg-[#050505] border border-neutral-800 rounded-xl p-3 text-sm text-white outline-none focus:ring-2 focus:ring-red-600 shadow-inner" />
                 </div>
                 <div>
-                  <label className="text-xs font-bold uppercase tracking-wider text-neutral-400 mb-2 block">Precio Soles</label>
-                  <input type="number" step="0.01" required value={lotePrecio} onChange={(e) => setLotePrecio(e.target.value)} placeholder="0.00" className="w-full bg-[#050505] border border-neutral-800 rounded-xl p-3 text-sm text-white outline-none focus:ring-2 focus:ring-red-600 shadow-inner" />
+                  <label className="text-xs font-bold uppercase tracking-wider text-neutral-400 mb-2 block">Precio Soles (¡Importante!)</label>
+                  <input type="number" step="0.01" required value={lotePrecio} onChange={(e) => setLotePrecio(e.target.value)} placeholder="Ej. 35.00" className="w-full bg-[#050505] border border-neutral-800 rounded-xl p-3 text-sm text-white outline-none focus:ring-2 focus:ring-red-600 shadow-inner" />
                 </div>
               </div>
 
@@ -1308,6 +1506,43 @@ export default function App() {
               <div className="flex justify-end gap-3 pt-4 border-t border-[#2b0d0d]">
                 <button type="button" onClick={cerrarModalReemplazo} className="px-5 py-2.5 text-neutral-400 hover:text-white text-sm font-bold">Cancelar</button>
                 <button type="submit" className="px-6 py-2.5 bg-gradient-to-r from-purple-900 to-red-800 hover:from-purple-800 hover:to-red-700 text-white rounded-xl text-sm font-bold shadow-lg shadow-red-950">Ejecutar Reemplazo</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL EDITAR CLIENTE (CORREGIR FECHAS) */}
+      {modalEditarCli && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-50 flex justify-center items-center p-4">
+          <div className="bg-[#0d0d0d] border border-[#3b0909] rounded-3xl w-full max-w-md p-8 space-y-5 shadow-2xl shadow-blue-950/40">
+            <div className="flex justify-between items-center border-b border-[#2b0d0d] pb-4">
+              <h3 className="text-xl font-extrabold text-white flex items-center gap-2"><Edit className="w-5 h-5 text-blue-400"/> Editar Cliente</h3>
+              <button onClick={() => { setModalEditarCli(false); setClienteEditando(null); }} className="text-neutral-400 hover:text-white"><X className="w-6 h-6" /></button>
+            </div>
+            
+            <form onSubmit={guardarEdicionCliente} className="space-y-4">
+              <div>
+                <label className="text-xs font-bold uppercase tracking-wider text-neutral-400 mb-1.5 block">Nombre del Cliente</label>
+                <input type="text" required value={cliNom} onChange={(e) => setCliNom(e.target.value)} className="w-full bg-[#050505] border border-neutral-800 rounded-xl p-3 text-sm text-white outline-none focus:ring-2 focus:ring-blue-600 shadow-inner" />
+              </div>
+              <div>
+                <label className="text-xs font-bold uppercase tracking-wider text-neutral-400 mb-1.5 block">WhatsApp</label>
+                <input type="text" required value={cliNum} onChange={(e) => setCliNum(e.target.value)} className="w-full bg-[#050505] border border-neutral-800 rounded-xl p-3 text-sm text-white outline-none focus:ring-2 focus:ring-blue-600 shadow-inner" />
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="text-xs font-bold uppercase tracking-wider text-neutral-400 mb-1.5 block">Fecha Inicio</label>
+                  <input type="date" required value={cliInicio} onChange={(e) => setCliInicio(e.target.value)} className="w-full bg-[#050505] border border-neutral-800 rounded-xl p-2.5 text-sm text-white outline-none focus:ring-2 focus:ring-blue-600 shadow-inner" />
+                </div>
+                <div>
+                  <label className="text-xs font-bold uppercase tracking-wider text-neutral-400 mb-1.5 block">Fecha Fin</label>
+                  <input type="date" required value={cliFin} onChange={(e) => setCliFin(e.target.value)} className="w-full bg-[#050505] border border-neutral-800 rounded-xl p-2.5 text-sm text-white outline-none focus:ring-2 focus:ring-blue-600 shadow-inner" />
+                </div>
+              </div>
+              <div className="flex justify-end gap-3 pt-4 border-t border-[#2b0d0d]">
+                <button type="button" onClick={() => { setModalEditarCli(false); setClienteEditando(null); }} className="px-5 py-2.5 text-neutral-400 hover:text-white text-sm font-bold">Cancelar</button>
+                <button type="submit" className="px-6 py-2.5 bg-gradient-to-r from-blue-900 to-blue-700 hover:from-blue-800 hover:to-blue-600 text-white rounded-xl text-sm font-bold shadow-lg shadow-blue-950">Guardar Cambios</button>
               </div>
             </form>
           </div>
@@ -1376,7 +1611,26 @@ export default function App() {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="text-xs font-bold uppercase tracking-wider text-neutral-400 mb-1.5 block">Fecha Inicio</label>
-                  <input type="date" required value={cliInicio} onChange={(e) => setCliInicio(e.target.value)} className="w-full bg-[#050505] border border-neutral-800 rounded-xl p-2.5 text-sm text-white outline-none focus:ring-2 focus:ring-red-600 shadow-inner" />
+                  <input 
+                    type="date" 
+                    required 
+                    value={cliInicio} 
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setCliInicio(val);
+                      // AUTO-COMPLETADO MAGICO DE FECHA FIN (+1 MES)
+                      if (val) {
+                        const [yy, mm, dd] = val.split('-');
+                        const dateObj = new Date(parseInt(yy), parseInt(mm) - 1, parseInt(dd));
+                        dateObj.setMonth(dateObj.getMonth() + 1);
+                        const nY = dateObj.getFullYear();
+                        const nM = String(dateObj.getMonth() + 1).padStart(2, '0');
+                        const nD = String(dateObj.getDate()).padStart(2, '0');
+                        setCliFin(`${nY}-${nM}-${nD}`);
+                      }
+                    }} 
+                    className="w-full bg-[#050505] border border-neutral-800 rounded-xl p-2.5 text-sm text-white outline-none focus:ring-2 focus:ring-red-600 shadow-inner" 
+                  />
                 </div>
                 <div>
                   <label className="text-xs font-bold uppercase tracking-wider text-neutral-400 mb-1.5 block">Fecha Fin</label>
