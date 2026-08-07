@@ -28,7 +28,9 @@ import {
   UserPlus,
   UserMinus,
   CalendarDays,
-  Edit
+  Edit,
+  Calculator,
+  FileText
 } from 'lucide-react';
 
 export default function App() {
@@ -53,6 +55,28 @@ export default function App() {
 
   // --- ESTADO PARA ELIMINACIÓN MASIVA ---
   const [seleccionadosInv, setSeleccionadosInv] = useState([]);
+
+  // --- ESTADOS PARA REEMBOLSOS (INDIVIDUAL Y MASIVO) ---
+  const [subVistaReembolso, setSubVistaReembolso] = useState('calculadora'); // 'calculadora' | 'masivo'
+
+  // Individual
+  const [reembolsoCorreo, setReembolsoCorreo] = useState('');
+  const [reembolsoMoneda, setReembolsoMoneda] = useState('Bs');
+  const [reembolsoMonto, setReembolsoMonto] = useState('35');
+  const [reembolsoInicio, setReembolsoInicio] = useState('');
+  const [reembolsoFalla, setReembolsoFalla] = useState('');
+  const [reembolsoDuracion, setReembolsoDuracion] = useState(30);
+  const [resultadoReembolso, setResultadoReembolso] = useState(null);
+
+  // Masivo
+  const [masivoTexto, setMasivoTexto] = useState('');
+  const [masivoFalla, setMasivoFalla] = useState(() => new Date().toISOString().split('T')[0]);
+  const [masivoDuracion, setMasivoDuracion] = useState(30);
+  const [masivoNotas, setMasivoNotas] = useState(() => localStorage.getItem('alu_notasReembolso') || '');
+
+  useEffect(() => {
+    localStorage.setItem('alu_notasReembolso', masivoNotas);
+  }, [masivoNotas]);
 
   // --- NOTIFICACIONES FLOTANTES ---
   const [notificacion, setNotificacion] = useState({ visible: false, mensaje: '', tipo: 'success' });
@@ -293,7 +317,163 @@ export default function App() {
   }
 
   // =====================================================================
-  // 🔥 NUEVO TEXTO DE COBRO ESTÉTICO 🔥
+  // 🔥 LÓGICA DE REEMBOLSOS (INDIVIDUAL Y MASIVO) 🔥
+  // =====================================================================
+  function calcularReembolso(e) {
+    e.preventDefault();
+    if (!reembolsoInicio || !reembolsoFalla || !reembolsoMonto) {
+      mostrarNotificacion('Faltan datos para calcular', 'error');
+      return;
+    }
+
+    const dInicio = new Date(reembolsoInicio);
+    const dFalla = new Date(reembolsoFalla);
+    const diffTime = dFalla - dInicio;
+    
+    const diffDays = Math.round(diffTime / (1000 * 60 * 60 * 24));
+    const diasUsados = diffDays >= 0 ? diffDays + 1 : 0; 
+
+    if (diasUsados < 0 || diasUsados > reembolsoDuracion) {
+      mostrarNotificacion('Rango de fechas inválido o excede duración del plan', 'error');
+      return;
+    }
+
+    const diasSinUsar = reembolsoDuracion - diasUsados;
+    const valorPorDia = parseFloat(reembolsoMonto) / reembolsoDuracion;
+    const consumido = valorPorDia * diasUsados;
+    const aDevolver = valorPorDia * diasSinUsar;
+
+    const formatoFecha = (dateStr) => {
+      const parts = dateStr.split('-');
+      return `${parts[2]}/${parts[1]}/${parts[0]}`;
+    };
+
+    setResultadoReembolso({
+      diasUsados,
+      diasSinUsar,
+      valorPorDia,
+      consumido,
+      aDevolver,
+      montoS: parseFloat(reembolsoMonto),
+      duracion: reembolsoDuracion,
+      inicio: formatoFecha(reembolsoInicio),
+      falla: formatoFecha(reembolsoFalla),
+      moneda: reembolsoMoneda,
+      correo: reembolsoCorreo || 'No especificado'
+    });
+  }
+
+  function copiarComprobanteReembolso() {
+    if (!resultadoReembolso) return;
+    const r = resultadoReembolso;
+    const txt = `*COMPROBANTE DE REEMBOLSO*\nCorreo: ${r.correo}\nMonto a devolver: ${r.moneda} ${r.aDevolver.toFixed(2)}\n\nDetalles:\n- Monto pagado: ${r.moneda} ${r.montoS.toFixed(2)} por ${r.duracion} días\n- Días usados: ${r.diasUsados}\n- Días sin usar: ${r.diasSinUsar}\n\nCálculo de devolución:\n${r.moneda} ${r.montoS.toFixed(2)} ÷ ${r.duracion} = ${r.moneda} ${r.valorPorDia.toFixed(2)} por día × ${r.diasSinUsar} días sin usar = ${r.moneda} ${r.aDevolver.toFixed(2)}`;
+    navigator.clipboard.writeText(txt);
+    mostrarNotificacion('Comprobante copiado al portapapeles', 'success');
+  }
+
+  async function desasignarDesdeReembolso() {
+    if (!resultadoReembolso || !resultadoReembolso.correo || resultadoReembolso.correo === 'No especificado') {
+      mostrarNotificacion('Debe ingresar un correo válido en el formulario', 'error');
+      return;
+    }
+    
+    const invMatch = inventario.find(i => (i.correo || '').toLowerCase().trim() === resultadoReembolso.correo.toLowerCase().trim());
+    
+    if (!invMatch) {
+      mostrarNotificacion('Este correo no se encuentra registrado en el inventario actual', 'error');
+      return;
+    }
+
+    if (invMatch.estado === 'Disponible') {
+      mostrarNotificacion('Esta cuenta ya figura como Disponible (Desasignada)', 'success');
+      return;
+    }
+
+    await desasignarCuentaUnica(invMatch);
+  }
+
+  // Lógica de Reembolso Masivo (Borra y genera notas)
+  async function procesarReembolsoMasivo(e) {
+    e.preventDefault();
+    const regexCorreos = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
+    const correos = masivoTexto.match(regexCorreos) || [];
+
+    if (correos.length === 0) {
+      return mostrarNotificacion('No se detectaron correos válidos en el texto', 'error');
+    }
+
+    if (!confirm(`¿Estás seguro de eliminar PERMANENTEMENTE y calcular el reembolso de ${correos.length} cuentas?`)) return;
+
+    setCargando(true);
+    let nuevasNotas = `\n--- LOTE DE REEMBOLSOS (${new Date().toLocaleDateString()} - ${new Date().toLocaleTimeString()}) ---\n`;
+    let idsInvAEliminar = [];
+
+    try {
+      for (let c of correos) {
+        const correoLimpio = c.toLowerCase().trim();
+        const invMatch = inventario.find(i => (i.correo || '').toLowerCase().trim() === correoLimpio);
+
+        if (invMatch) {
+          idsInvAEliminar.push(invMatch.id); // Se preparan para eliminación total del inventario
+
+          if (invMatch.estado === 'Asignada') {
+            const cliMatch = clientes.find(cli => (cli.cuenta || '').toLowerCase().includes(correoLimpio));
+            
+            if (cliMatch) {
+              const monto = parseFloat(invMatch.precio_venta) > 0 ? parseFloat(invMatch.precio_venta) : 35;
+              const dInicio = new Date(cliMatch.inicio || new Date());
+              const dFalla = new Date(masivoFalla);
+              const diffTime = dFalla - dInicio;
+              const diffDays = Math.round(diffTime / (1000 * 60 * 60 * 24));
+              const diasUsados = diffDays >= 0 ? diffDays + 1 : 0;
+              const diasSinUsar = Math.max(0, masivoDuracion - diasUsados);
+              const aDevolver = (monto / masivoDuracion) * diasSinUsar;
+
+              nuevasNotas += `✅ Cliente: ${cliMatch.nombre}\n   ✉️ ${correoLimpio}\n   💰 Reembolso: S/ ${aDevolver.toFixed(2)} (Faltaban ${diasSinUsar} días de ${masivoDuracion})\n\n`;
+
+              // Actualizamos la cadena "cuenta" del cliente, si se queda vacío, borramos el cliente entero.
+              const regexStr = new RegExp(`${correoLimpio}[^,]*`, 'gi');
+              let nuevaCuenta = cliMatch.cuenta.replace(regexStr, '').replace(/,\s*,/g, ',').replace(/^,|,$/g, '').trim();
+              
+              if (nuevaCuenta === '') {
+                await supabase.from('clientes').delete().eq('id', cliMatch.id);
+              } else {
+                await supabase.from('clientes').update({ cuenta: nuevaCuenta }).eq('id', cliMatch.id);
+              }
+            } else {
+              nuevasNotas += `⚠️ ✉️ ${correoLimpio} (Asignado en stock pero sin cliente en DB. Fue eliminado)\n\n`;
+            }
+          } else {
+            nuevasNotas += `🗑️ ✉️ ${correoLimpio} (Estaba libre en stock. Eliminado sin reembolso)\n\n`;
+          }
+        } else {
+          nuevasNotas += `❌ ✉️ ${correoLimpio} (No encontrado en la base de datos)\n\n`;
+        }
+      }
+
+      // Ejecutar borrado masivo de Supabase
+      if (idsInvAEliminar.length > 0) {
+        for (let i = 0; i < idsInvAEliminar.length; i += 100) {
+          const batch = idsInvAEliminar.slice(i, i + 100);
+          const { error } = await supabase.from('inventario').delete().in('id', batch);
+          if (error) throw error;
+        }
+      }
+
+      setMasivoNotas(prev => (prev + nuevasNotas).trim());
+      setMasivoTexto('');
+      mostrarNotificacion(`Proceso completado. ${idsInvAEliminar.length} eliminadas.`, 'success');
+      cargarDatos(true);
+    } catch (error) {
+      mostrarNotificacion('Error en proceso masivo: ' + error.message, 'error');
+    } finally {
+      setCargando(false);
+    }
+  }
+
+
+  // =====================================================================
+  // 🔥 TEXTOS DE COBRO ESTÉTICOS Y WHATSAPP 🔥
   // =====================================================================
   const generarTextoCobro = (grupo) => {
     const correosStr = grupo.cuentas.map(c => `▪️ ${c.cuenta.split(' (')[0].trim()}`).join('\n');
@@ -407,7 +587,7 @@ export default function App() {
           await supabase.from('clientes').update({ cuenta: nuevaCuenta }).eq('id', cliMatch.id);
         }
       }
-      mostrarNotificacion('Cuenta desasignada correctamente', 'success');
+      mostrarNotificacion('Cuenta desasignada correctamente y vuelta al stock', 'success');
       cargarDatos(true);
     } catch (error) {
       mostrarNotificacion('Error al desasignar: ' + error.message, 'error');
@@ -938,6 +1118,7 @@ export default function App() {
             <BotonesMenu icono={<CalendarDays className="text-blue-400" />} texto="Fechas de Correos" vista="fechas" vistaActual={vista} setVista={setVista} />
             <BotonesMenu icono={<DollarSign className="text-green-500" />} texto="Gestión de Cuentas" vista="gestion" vistaActual={vista} setVista={setVista} />
             <BotonesMenu icono={<PieChart className="text-amber-500" />} texto="Control de Gastos" vista="gastos" vistaActual={vista} setVista={setVista} />
+            <BotonesMenu icono={<Calculator className="text-pink-500" />} texto="Reembolsos" vista="reembolsos" vistaActual={vista} setVista={setVista} />
           </nav>
         </div>
         <div className="p-4 border-t border-[#260505] bg-[#050505]">
@@ -950,11 +1131,10 @@ export default function App() {
       {/* 📱 BARRA INFERIOR MÓVIL */}
       <nav className="md:hidden fixed bottom-0 inset-x-0 bg-[#0a0a0a] border-t border-[#260505] flex justify-around items-center py-2 px-1 z-40 shadow-2xl">
         <BotonMobile icono={<LayoutDashboard className="w-5 h-5" />} texto="Dash" vista="dashboard" vistaActual={vista} setVista={setVista} />
-        <BotonMobile icono={<Zap className="w-5 h-5 text-red-500" />} texto="Ventas" vista="ventas" vistaActual={vista} setVista={setVista} />
         <BotonMobile icono={<Package className="w-5 h-5" />} texto="Stock" vista="inventario" vistaActual={vista} setVista={setVista} />
         <BotonMobile icono={<Users className="w-5 h-5" />} texto="Clientes" vista="clientes" vistaActual={vista} setVista={setVista} />
-        <BotonMobile icono={<CalendarDays className="w-5 h-5 text-blue-400" />} texto="Fechas" vista="fechas" vistaActual={vista} setVista={setVista} />
         <BotonMobile icono={<PieChart className="w-5 h-5 text-amber-500" />} texto="Gastos" vista="gastos" vistaActual={vista} setVista={setVista} />
+        <BotonMobile icono={<Calculator className="w-5 h-5 text-pink-500" />} texto="Reembolsos" vista="reembolsos" vistaActual={vista} setVista={setVista} />
       </nav>
 
       {/* CONTENIDO PRINCIPAL */}
@@ -966,7 +1146,7 @@ export default function App() {
             </button>
             <h1 className="text-lg md:text-xl font-bold tracking-tight text-white capitalize flex items-center gap-2">
               <span className="w-2 h-2 rounded-full bg-red-600"></span>
-              {vista === 'clientes' ? 'Clientes' : vista === 'ventas' ? 'Ventas Rápidas' : vista === 'inventario' ? 'Inventario' : vista === 'gestion' ? 'Gestión de Cuentas' : vista === 'fechas' ? 'Fechas y Vencimientos' : vista === 'gastos' ? 'Control de Gastos' : 'Dashboard Financiero'}
+              {vista === 'clientes' ? 'Clientes' : vista === 'ventas' ? 'Ventas Rápidas' : vista === 'inventario' ? 'Inventario' : vista === 'gestion' ? 'Gestión de Cuentas' : vista === 'fechas' ? 'Fechas y Vencimientos' : vista === 'gastos' ? 'Control de Gastos' : vista === 'reembolsos' ? 'Panel de Reembolsos' : 'Dashboard Financiero'}
             </h1>
           </div>
           <div className="bg-[#141414] border border-[#3b0909] px-4 py-1.5 rounded-2xl flex items-center gap-2.5 shadow-lg shadow-red-950/20">
@@ -1113,6 +1293,226 @@ export default function App() {
                       </div>
                     </div>
                   </div>
+                </div>
+              )}
+
+              {/* VISTA PANEL DE REEMBOLSOS (CON SUB PESTAÑAS) */}
+              {vista === 'reembolsos' && (
+                <div className="flex flex-col gap-6 animate-fade-in">
+                  
+                  {/* PESTAÑAS */}
+                  <div className="flex flex-wrap gap-3 border-b border-[#2b0d0d] pb-6">
+                    <button onClick={() => setSubVistaReembolso('calculadora')} className={`px-6 py-3 rounded-2xl font-bold text-sm transition-all border flex items-center gap-2 ${subVistaReembolso === 'calculadora' ? 'bg-pink-600/20 text-pink-400 border-pink-500/50 shadow-lg shadow-pink-900/20' : 'bg-[#140a0a] text-neutral-400 border-[#2b0d0d] hover:bg-[#1f0f0f]'}`}>
+                      <Calculator className="w-4 h-4" /> Calculadora Individual
+                    </button>
+                    <button onClick={() => setSubVistaReembolso('masivo')} className={`px-6 py-3 rounded-2xl font-bold text-sm transition-all border flex items-center gap-2 ${subVistaReembolso === 'masivo' ? 'bg-purple-600/20 text-purple-400 border-purple-500/50 shadow-lg shadow-purple-900/20' : 'bg-[#140a0a] text-neutral-400 border-[#2b0d0d] hover:bg-[#1f0f0f]'}`}>
+                      <Users className="w-4 h-4" /> Reembolsos Masivos y Notas
+                    </button>
+                  </div>
+
+                  {subVistaReembolso === 'calculadora' ? (
+                    /* PANEL CALCULADORA INDIVIDUAL */
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 items-start animate-fade-in">
+                      {/* PANEL IZQUIERDO: FORMULARIO */}
+                      <div className="p-6 md:p-8 rounded-3xl border border-[#2b0d0d] bg-[#0d0d0d] shadow-2xl space-y-6">
+                        <h3 className="text-lg font-black text-white tracking-widest uppercase flex items-center gap-3">
+                          <span className="text-pink-500 font-mono">01</span> DATOS DEL SERVICIO
+                        </h3>
+                        
+                        <form onSubmit={calcularReembolso} className="space-y-6">
+                          <div>
+                            <label className="text-xs font-bold uppercase tracking-wider text-neutral-400 mb-1.5 block">Correo de la Cuenta</label>
+                            <div className="relative">
+                              <Mail className="absolute left-3.5 top-3.5 w-4 h-4 text-neutral-500" />
+                              <input type="text" value={reembolsoCorreo} onChange={e => setReembolsoCorreo(e.target.value)} required placeholder="ejemplo@correo.com" className="w-full bg-[#050505] border border-neutral-800 pl-11 pr-4 py-3 rounded-xl text-sm text-white outline-none focus:ring-2 focus:ring-pink-600 transition shadow-inner font-mono" />
+                            </div>
+                            <p className="text-[10px] text-neutral-500 mt-1">Este correo será usado si decides desasignar la cuenta al final.</p>
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-4">
+                            <div>
+                              <label className="text-xs font-bold uppercase tracking-wider text-neutral-400 mb-1.5 block">Moneda</label>
+                              <select value={reembolsoMoneda} onChange={e => setReembolsoMoneda(e.target.value)} className="w-full bg-[#050505] border border-neutral-800 rounded-xl p-3 text-sm text-white outline-none focus:ring-2 focus:ring-pink-600 font-bold transition shadow-inner">
+                                <option value="Bs">Bs BOB</option>
+                                <option value="S/">S/ PEN</option>
+                                <option value="$">USD</option>
+                                <option value="€">EUR</option>
+                              </select>
+                            </div>
+                            <div>
+                              <label className="text-xs font-bold uppercase tracking-wider text-neutral-400 mb-1.5 block">Monto pagado</label>
+                              <input type="number" step="0.01" value={reembolsoMonto} onChange={e => setReembolsoMonto(e.target.value)} required placeholder="0.00" className="w-full bg-[#050505] border border-neutral-800 rounded-xl p-3 text-sm text-white outline-none focus:ring-2 focus:ring-pink-600 font-mono transition shadow-inner" />
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-4">
+                            <div>
+                              <label className="text-xs font-bold uppercase tracking-wider text-neutral-400 mb-1.5 block">Inicio del servicio</label>
+                              <input type="date" value={reembolsoInicio} onChange={e => setReembolsoInicio(e.target.value)} required className="w-full bg-[#050505] border border-neutral-800 rounded-xl p-3 text-sm text-neutral-300 outline-none focus:ring-2 focus:ring-pink-600 transition shadow-inner" />
+                            </div>
+                            <div>
+                              <label className="text-xs font-bold uppercase tracking-wider text-neutral-400 mb-1.5 block">Reporte de la falla</label>
+                              <input type="date" value={reembolsoFalla} onChange={e => setReembolsoFalla(e.target.value)} required className="w-full bg-[#050505] border border-neutral-800 rounded-xl p-3 text-sm text-neutral-300 outline-none focus:ring-2 focus:ring-pink-600 transition shadow-inner" />
+                            </div>
+                          </div>
+
+                          <div>
+                            <label className="text-xs font-bold uppercase tracking-wider text-neutral-400 mb-2 block">Duración del plan contratado</label>
+                            <div className="flex flex-wrap gap-2 mb-3">
+                              {[7, 15, 30, 60].map(d => (
+                                <button type="button" key={d} onClick={() => setReembolsoDuracion(d)} className={`px-4 py-2 rounded-xl text-xs font-bold transition border ${reembolsoDuracion === d ? 'bg-pink-600/20 border-pink-500/50 text-pink-400' : 'bg-[#140a0a] text-neutral-400 border-neutral-800 hover:border-neutral-600 hover:text-white'}`}>
+                                  {d} {d===30?'(1 mes)':d===60?'(2 meses)':'días'}
+                                </button>
+                              ))}
+                            </div>
+                            <div className="relative">
+                              <input type="number" value={reembolsoDuracion} onChange={e => setReembolsoDuracion(Number(e.target.value))} required className="w-full bg-[#050505] border border-neutral-800 rounded-xl p-3 text-sm text-white outline-none focus:ring-2 focus:ring-pink-600 transition shadow-inner pl-4 pr-12 font-mono" />
+                              <span className="absolute right-4 top-3.5 text-sm font-bold text-neutral-500">días</span>
+                            </div>
+                          </div>
+
+                          <button type="submit" className="w-full bg-[#961b3b] hover:bg-[#b52248] text-white px-5 py-4 rounded-xl text-sm font-bold transition-all shadow-lg shadow-pink-950/40 border border-pink-900/50 flex items-center justify-center gap-2 tracking-wide mt-2">
+                            <Calculator className="w-4 h-4" /> Calcular reembolso
+                          </button>
+                        </form>
+                      </div>
+
+                      {/* PANEL DERECHO: COMPROBANTE */}
+                      <div className="p-6 md:p-8 rounded-3xl border border-[#2b0d0d] bg-[#0d0d0d] shadow-2xl relative min-h-[500px] flex flex-col">
+                        <h3 className="text-lg font-black text-white tracking-widest uppercase flex items-center gap-3 mb-6">
+                          <span className="text-pink-500 font-mono">02</span> COMPROBANTE
+                        </h3>
+                        
+                        {resultadoReembolso ? (
+                          <div className="flex-1 flex flex-col justify-between animate-fade-in space-y-8">
+                            <div>
+                              {/* Cabecera Comprobante */}
+                              <div className="flex justify-between items-end border-b border-neutral-800 pb-4">
+                                <div>
+                                  <span className="text-xs font-bold text-pink-600 tracking-widest uppercase block mb-1">Reembolso</span>
+                                  <span className="text-base font-bold text-white font-mono break-all">{resultadoReembolso.correo}</span>
+                                </div>
+                                <span className="text-xs text-neutral-500 font-mono uppercase">RJ-{new Date().toISOString().replace(/\D/g,'').slice(0,10)}</span>
+                              </div>
+
+                              {/* Monto Principal */}
+                              <div className="text-center py-8">
+                                <span className="text-xs font-bold tracking-widest text-neutral-400 uppercase mb-2 block">Monto a devolver</span>
+                                <div className="text-[3rem] leading-none font-black text-white font-mono">
+                                  {resultadoReembolso.moneda} <span className="tracking-tight">{resultadoReembolso.aDevolver.toFixed(2)}</span>
+                                </div>
+                                <div className="mt-4">
+                                  <span className="inline-block px-5 py-1.5 rounded-full border border-teal-500/40 bg-teal-500/10 text-teal-400 text-xs font-bold tracking-widest">
+                                    CORRESPONDE REEMBOLSO
+                                  </span>
+                                </div>
+                              </div>
+
+                              {/* Tabla de desglose */}
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-y-4 gap-x-8 text-sm border-t border-b border-neutral-800 border-dashed py-6">
+                                <div className="flex justify-between items-center"><span className="text-neutral-500">Monto pagado</span> <span className="font-mono text-neutral-200 font-bold">{resultadoReembolso.moneda} {resultadoReembolso.montoS.toFixed(2)}</span></div>
+                                <div className="flex justify-between items-center"><span className="text-neutral-500">Plan contratado</span> <span className="font-mono text-neutral-200 font-bold">{resultadoReembolso.duracion} días</span></div>
+                                <div className="flex justify-between items-center"><span className="text-neutral-500">Inicio</span> <span className="font-mono text-neutral-200 font-bold">{resultadoReembolso.inicio}</span></div>
+                                <div className="flex justify-between items-center"><span className="text-neutral-500">Falla reportada</span> <span className="font-mono text-neutral-200 font-bold">{resultadoReembolso.falla}</span></div>
+                                <div className="flex justify-between items-center"><span className="text-neutral-500">Valor por día</span> <span className="font-mono text-neutral-200 font-bold">{resultadoReembolso.moneda} {resultadoReembolso.valorPorDia.toFixed(2)}</span></div>
+                                <div className="flex justify-between items-center"><span className="text-neutral-500">Días usados</span> <span className="font-mono text-neutral-200 font-bold">{resultadoReembolso.diasUsados} de {resultadoReembolso.duracion}</span></div>
+                                <div className="flex justify-between items-center"><span className="text-neutral-500">Días sin usar</span> <span className="font-mono text-white font-bold">{resultadoReembolso.diasSinUsar}</span></div>
+                                <div className="flex justify-between items-center"><span className="text-neutral-500">Ya consumido</span> <span className="font-mono text-neutral-200 font-bold">{resultadoReembolso.moneda} {resultadoReembolso.consumido.toFixed(2)}</span></div>
+                              </div>
+
+                              {/* Formula Explicativa */}
+                              <div className="bg-[#140a0a] p-4 rounded-xl border border-pink-900/20 font-mono text-xs text-neutral-400 mt-6 leading-relaxed shadow-inner text-center">
+                                {resultadoReembolso.moneda} {resultadoReembolso.montoS.toFixed(2)} ÷ {resultadoReembolso.duracion} = {resultadoReembolso.moneda} {resultadoReembolso.valorPorDia.toFixed(2)} por día × {resultadoReembolso.diasSinUsar} días sin usar = <span className="text-pink-400 font-bold">{resultadoReembolso.moneda} {resultadoReembolso.aDevolver.toFixed(2)}</span>
+                              </div>
+                            </div>
+
+                            {/* Botones de acción finales */}
+                            <div className="flex flex-col sm:flex-row gap-3 pt-6 border-t border-[#2b0d0d]">
+                              <button onClick={desasignarDesdeReembolso} className="flex-1 bg-red-950/40 hover:bg-red-900/50 text-red-400 py-3.5 rounded-xl text-sm font-bold transition flex items-center justify-center gap-2 border border-red-900/40 shadow-sm" title="Quitar este correo al cliente y devolver al stock">
+                                <UserMinus className="w-4 h-4" /> Desasignar Cuenta
+                              </button>
+                              <button onClick={copiarComprobanteReembolso} className="flex-1 bg-[#124d40] hover:bg-[#186655] text-white py-3.5 rounded-xl text-sm font-bold transition flex items-center justify-center gap-2 border border-[#1b7360] shadow-lg shadow-[#0f3d32]">
+                                <Copy className="w-4 h-4" /> Copiar texto
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="flex-1 flex flex-col items-center justify-center text-neutral-600 bg-[#0a0a0a] rounded-2xl border border-neutral-900 border-dashed">
+                            <Calculator className="w-16 h-16 mb-4 opacity-30 text-neutral-500" />
+                            <p className="text-sm font-medium">Ingresa los datos del cliente para calcular.</p>
+                          </div>
+                        )}
+                      </div>
+
+                    </div>
+                  ) : (
+                    /* PANEL REEMBOLSO MASIVO */
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 items-start animate-fade-in">
+                      {/* LADO IZQUIERDO: TEXTAREA MASIVO */}
+                      <div className="p-6 md:p-8 rounded-3xl border border-[#2b0d0d] bg-[#0d0d0d] shadow-2xl space-y-6">
+                        <h3 className="text-lg font-black text-white tracking-widest uppercase flex items-center gap-3">
+                          <Users className="text-purple-500 w-5 h-5" /> REEMBOLSO MASIVO
+                        </h3>
+                        <p className="text-sm text-neutral-400">Pega el texto con los correos. El sistema extraerá solo los correos, los borrará de la base de datos (inventario/cliente), y generará una nota de reembolso calculando los días faltantes.</p>
+
+                        <form onSubmit={procesarReembolsoMasivo} className="space-y-6">
+                          <div className="grid grid-cols-2 gap-4">
+                            <div>
+                              <label className="text-xs font-bold uppercase tracking-wider text-neutral-400 mb-1.5 block">Fecha de Falla / Caída</label>
+                              <input type="date" required value={masivoFalla} onChange={e => setMasivoFalla(e.target.value)} className="w-full bg-[#050505] border border-neutral-800 rounded-xl p-3 text-sm text-neutral-300 outline-none focus:ring-2 focus:ring-purple-600 transition shadow-inner" />
+                            </div>
+                            <div>
+                              <label className="text-xs font-bold uppercase tracking-wider text-neutral-400 mb-1.5 block">Plan Contratado</label>
+                              <div className="relative">
+                                <input type="number" value={masivoDuracion} onChange={e => setMasivoDuracion(Number(e.target.value))} required className="w-full bg-[#050505] border border-neutral-800 rounded-xl p-3 text-sm text-white outline-none focus:ring-2 focus:ring-purple-600 transition shadow-inner pl-4 pr-12 font-mono" />
+                                <span className="absolute right-4 top-3.5 text-sm font-bold text-neutral-500">días</span>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div>
+                            <label className="text-xs font-bold uppercase tracking-wider text-neutral-400 mb-2 block">Pega la lista de correos</label>
+                            <textarea 
+                              rows="8" 
+                              required 
+                              value={masivoTexto} 
+                              onChange={e => setMasivoTexto(e.target.value)} 
+                              placeholder="Ejemplo:&#10;rikimartinez508@gmail.com CORTAR&#10;chaiolgam3r@gmail.com CORTAR..." 
+                              className="w-full bg-[#050505] border border-neutral-800 rounded-xl p-4 text-sm text-white font-mono resize-none outline-none focus:ring-2 focus:ring-purple-600 shadow-inner"
+                            ></textarea>
+                          </div>
+
+                          <button type="submit" className="w-full bg-gradient-to-r from-purple-900 to-[#800f11] hover:from-purple-800 hover:to-red-800 text-white px-5 py-4 rounded-xl text-sm font-bold transition-all shadow-lg shadow-purple-950/40 border border-purple-900/50 flex items-center justify-center gap-2 tracking-wide mt-2">
+                            <Trash2 className="w-4 h-4" /> Eliminar Cuentas y Generar Notas
+                          </button>
+                        </form>
+                      </div>
+
+                      {/* LADO DERECHO: BLOCK DE NOTAS */}
+                      <div className="p-6 md:p-8 rounded-3xl border border-[#2b0d0d] bg-[#0d0d0d] shadow-2xl relative min-h-[500px] flex flex-col">
+                        <div className="flex justify-between items-center mb-4 pb-4 border-b border-[#2b0d0d]">
+                          <h3 className="text-lg font-black text-white tracking-widest uppercase flex items-center gap-3">
+                            <FileText className="text-purple-500 w-5 h-5" /> NOTAS DE REEMBOLSOS
+                          </h3>
+                          <button onClick={() => {if(confirm('¿Seguro que quieres borrar todas las notas guardadas?')) setMasivoNotas('')}} className="text-xs px-3 py-2 bg-red-950/40 text-red-400 font-bold rounded-lg border border-red-900/50 hover:bg-red-900/50 transition">
+                            Limpiar Hoja
+                          </button>
+                        </div>
+                        
+                        <textarea 
+                          value={masivoNotas}
+                          onChange={(e) => setMasivoNotas(e.target.value)}
+                          placeholder="Aquí aparecerá automáticamente el resumen de todos los reembolsos realizados..."
+                          className="flex-1 w-full bg-[#050505] border border-neutral-800 rounded-xl p-4 text-xs sm:text-sm text-neutral-300 font-mono resize-none outline-none focus:ring-2 focus:ring-purple-600 shadow-inner leading-relaxed whitespace-pre-wrap"
+                        ></textarea>
+
+                        <button onClick={() => {navigator.clipboard.writeText(masivoNotas); mostrarNotificacion('Notas copiadas al portapapeles', 'success')}} className="mt-4 w-full bg-[#141414] hover:bg-neutral-800 text-neutral-300 py-3 rounded-xl text-sm font-bold transition flex items-center justify-center gap-2 border border-neutral-800">
+                          <Copy className="w-4 h-4" /> Copiar todo el texto
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
                 </div>
               )}
 
