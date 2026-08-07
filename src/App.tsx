@@ -64,13 +64,22 @@ export default function App() {
   const [reembolsoMoneda, setReembolsoMoneda] = useState('Bs');
   const [reembolsoMonto, setReembolsoMonto] = useState('35');
   const [reembolsoInicio, setReembolsoInicio] = useState('');
-  const [reembolsoFalla, setReembolsoFalla] = useState('');
+  // Falla auto-completada con hoy
+  const [reembolsoFalla, setReembolsoFalla] = useState(() => {
+    const d = new Date();
+    const tzOffset = d.getTimezoneOffset() * 60000;
+    return new Date(d - tzOffset).toISOString().split('T')[0];
+  });
   const [reembolsoDuracion, setReembolsoDuracion] = useState(30);
   const [resultadoReembolso, setResultadoReembolso] = useState(null);
 
   // Masivo
   const [masivoTexto, setMasivoTexto] = useState('');
-  const [masivoFalla, setMasivoFalla] = useState(() => new Date().toISOString().split('T')[0]);
+  const [masivoFalla, setMasivoFalla] = useState(() => {
+    const d = new Date();
+    const tzOffset = d.getTimezoneOffset() * 60000;
+    return new Date(d - tzOffset).toISOString().split('T')[0];
+  });
   const [masivoDuracion, setMasivoDuracion] = useState(30);
   const [masivoNotas, setMasivoNotas] = useState(() => localStorage.getItem('alu_notasReembolso') || '');
 
@@ -1131,6 +1140,7 @@ export default function App() {
       {/* 📱 BARRA INFERIOR MÓVIL */}
       <nav className="md:hidden fixed bottom-0 inset-x-0 bg-[#0a0a0a] border-t border-[#260505] flex justify-around items-center py-2 px-1 z-40 shadow-2xl">
         <BotonMobile icono={<LayoutDashboard className="w-5 h-5" />} texto="Dash" vista="dashboard" vistaActual={vista} setVista={setVista} />
+        <BotonMobile icono={<Zap className="w-5 h-5 text-red-500" />} texto="Ventas" vista="ventas" vistaActual={vista} setVista={setVista} />
         <BotonMobile icono={<Package className="w-5 h-5" />} texto="Stock" vista="inventario" vistaActual={vista} setVista={setVista} />
         <BotonMobile icono={<Users className="w-5 h-5" />} texto="Clientes" vista="clientes" vistaActual={vista} setVista={setVista} />
         <BotonMobile icono={<PieChart className="w-5 h-5 text-amber-500" />} texto="Gastos" vista="gastos" vistaActual={vista} setVista={setVista} />
@@ -1324,9 +1334,27 @@ export default function App() {
                             <label className="text-xs font-bold uppercase tracking-wider text-neutral-400 mb-1.5 block">Correo de la Cuenta</label>
                             <div className="relative">
                               <Mail className="absolute left-3.5 top-3.5 w-4 h-4 text-neutral-500" />
-                              <input type="text" value={reembolsoCorreo} onChange={e => setReembolsoCorreo(e.target.value)} required placeholder="ejemplo@correo.com" className="w-full bg-[#050505] border border-neutral-800 pl-11 pr-4 py-3 rounded-xl text-sm text-white outline-none focus:ring-2 focus:ring-pink-600 transition shadow-inner font-mono" />
+                              <input 
+                                type="text" 
+                                value={reembolsoCorreo} 
+                                onChange={(e) => {
+                                  const correo = e.target.value;
+                                  setReembolsoCorreo(correo);
+                                  
+                                  // Auto-relleno Mágico de Fecha de Inicio
+                                  if (correo.length > 5 && clientes.length > 0) {
+                                    const cliMatch = clientes.find(c => (c.cuenta || '').toLowerCase().includes(correo.toLowerCase().trim()));
+                                    if (cliMatch && cliMatch.inicio) {
+                                      setReembolsoInicio(cliMatch.inicio);
+                                    }
+                                  }
+                                }} 
+                                required 
+                                placeholder="ejemplo@correo.com" 
+                                className="w-full bg-[#050505] border border-neutral-800 pl-11 pr-4 py-3 rounded-xl text-sm text-white outline-none focus:ring-2 focus:ring-pink-600 transition shadow-inner font-mono" 
+                              />
                             </div>
-                            <p className="text-[10px] text-neutral-500 mt-1">Este correo será usado si decides desasignar la cuenta al final.</p>
+                            <p className="text-[10px] text-neutral-500 mt-1">Este correo se usará si desasignas la cuenta. Busca automáticamente la fecha inicial.</p>
                           </div>
 
                           <div className="grid grid-cols-2 gap-4">
