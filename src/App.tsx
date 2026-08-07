@@ -51,6 +51,9 @@ export default function App() {
   const [pagos, setPagos] = useState([]);
   const [cargando, setCargando] = useState(true);
 
+  // --- ESTADO PARA ELIMINACIÓN MASIVA ---
+  const [seleccionadosInv, setSeleccionadosInv] = useState([]);
+
   // --- NOTIFICACIONES FLOTANTES ---
   const [notificacion, setNotificacion] = useState({ visible: false, mensaje: '', tipo: 'success' });
 
@@ -249,7 +252,6 @@ export default function App() {
       mostrarNotificacion('Error al editar: ' + error.message, 'error');
     }
   }
-  // =====================================================================
 
   const [modalInv, setModalInv] = useState(false);
   const [modalCaja, setModalCaja] = useState(false);
@@ -310,7 +312,6 @@ export default function App() {
     navigator.clipboard.writeText(generarTextoCobro(grupo));
     mostrarNotificacion('Mensaje de cobro copiado al portapapeles', 'success');
   };
-  // =====================================================================
 
   async function renovarCobranzaGrupo(cuentas) {
     try {
@@ -413,6 +414,29 @@ export default function App() {
     }
   }
 
+  async function eliminarClienteYLiberar(idCli, cuentaStr) {
+    if (!confirm('¿Seguro que deseas eliminar este cliente permanentemente? Sus cuentas asignadas volverán al stock disponible.')) return;
+    setCargando(true);
+    try {
+      const regexCorreos = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
+      const correos = cuentaStr.match(regexCorreos) || [];
+      for (let correo of correos) {
+        const invMatch = inventario.find(i => (i.correo || '').toLowerCase().trim() === correo.toLowerCase().trim());
+        if (invMatch) {
+          await supabase.from('inventario').update({ estado: 'Disponible', cliente_asignado: null }).eq('id', invMatch.id);
+        }
+      }
+      const { error } = await supabase.from('clientes').delete().eq('id', idCli);
+      if (error) throw error;
+      mostrarNotificacion('Cliente eliminado y cuentas liberadas con éxito', 'success');
+      cargarDatos(true);
+    } catch (err) {
+      mostrarNotificacion('Error al eliminar cliente: ' + err.message, 'error');
+    } finally {
+      setCargando(false);
+    }
+  }
+
   async function procesarReemplazos(e) {
     e.preventDefault();
     const regexCorreos = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
@@ -454,6 +478,40 @@ export default function App() {
       cargarDatos(true);
     } catch (error) {
       mostrarNotificacion('Error al procesar reemplazos: ' + error.message, 'error');
+    } finally {
+      setCargando(false);
+    }
+  }
+
+  // =====================================================================
+  // 🔥 LÓGICA ELIMINACIÓN MASIVA 🔥
+  // =====================================================================
+  function toggleSeleccionInv(id) {
+    setSeleccionadosInv(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  }
+
+  function toggleSeleccionTodos(filtrados) {
+    if (seleccionadosInv.length === filtrados.length && filtrados.length > 0) {
+      setSeleccionadosInv([]);
+    } else {
+      setSeleccionadosInv(filtrados.map(i => i.id));
+    }
+  }
+
+  async function eliminarSeleccionados() {
+    if (!confirm(`¿Estás seguro de eliminar PERMANENTEMENTE ${seleccionadosInv.length} cuentas del inventario?`)) return;
+    setCargando(true);
+    try {
+      for (let i = 0; i < seleccionadosInv.length; i += 100) {
+        const batch = seleccionadosInv.slice(i, i + 100);
+        const { error } = await supabase.from('inventario').delete().in('id', batch);
+        if (error) throw error;
+      }
+      mostrarNotificacion(`Se eliminaron ${seleccionadosInv.length} cuentas exitosamente.`, 'success');
+      setSeleccionadosInv([]);
+      cargarDatos(true);
+    } catch (error) {
+      mostrarNotificacion('Error en eliminación masiva: ' + error.message, 'error');
     } finally {
       setCargando(false);
     }
@@ -802,14 +860,12 @@ export default function App() {
   dManana.setDate(dManana.getDate() + 1);
   const mananaStr = `${dManana.getFullYear()}-${String(dManana.getMonth() + 1).padStart(2, '0')}-${String(dManana.getDate()).padStart(2, '0')}`;
 
-  // Atrapa a los que vencen HOY, y también a los que ya se pasaron de fecha y siguen como "Pagado" (para avisarles)
   const cuentasQueVencenHoyAgrupadas = agruparPorWhatsapp(clientes.filter((c) => {
     return c.pago === 'Pagado' && c.fin && c.fin <= hoyStr;
   }));
   
   const deudasPendientesAgrupadas = agruparPorWhatsapp(clientes.filter((c) => c.pago === 'Pendiente'));
   
-  // Exclusivo para MAÑANA
   const vencenMananaAgrupados = agruparPorWhatsapp(clientes.filter((c) => {
     return c.pago === 'Pagado' && c.fin === mananaStr;
   }));
@@ -1198,6 +1254,11 @@ export default function App() {
                       <input type="text" value={busquedaInv} onChange={(e) => setBusquedaInv(e.target.value)} placeholder="Buscar correo o proveedor..." className="w-full pl-11 pr-4 py-2.5 bg-[#050505] border border-neutral-800 rounded-xl text-sm text-neutral-100 outline-none focus:ring-2 focus:ring-red-600 shadow-inner" />
                     </div>
                     <div className="flex flex-wrap items-center gap-3 w-full md:w-auto justify-end">
+                      {seleccionadosInv.length > 0 && (
+                        <button onClick={eliminarSeleccionados} className="bg-red-950 hover:bg-red-900 text-red-400 px-4 py-2.5 rounded-xl text-sm font-semibold transition border border-red-900/50 flex items-center gap-2 shadow-sm animate-fade-in">
+                          <Trash2 className="w-4 h-4" /> Eliminar Seleccionados ({seleccionadosInv.length})
+                        </button>
+                      )}
                       <button onClick={() => setModalReemplazo(true)} className="bg-gradient-to-r from-purple-900 to-red-900 hover:from-purple-800 hover:to-red-800 text-white px-4 py-2.5 rounded-xl text-sm font-bold transition border border-red-800/50 flex items-center gap-2 shadow-sm">
                         <RefreshCw className="w-4 h-4" /> Reemplazar Caídas
                       </button>
@@ -1213,6 +1274,14 @@ export default function App() {
                     <table className="w-full text-left text-sm">
                       <thead className="bg-[#140a0a] text-red-500 border-b border-[#2b0d0d] uppercase tracking-wider text-xs font-bold">
                         <tr>
+                          <th className="px-6 py-4 w-12 text-center">
+                            <input 
+                              type="checkbox" 
+                              onChange={() => toggleSeleccionTodos(inventarioFiltrado)} 
+                              checked={inventarioFiltrado.length > 0 && seleccionadosInv.length === inventarioFiltrado.length} 
+                              className="w-4 h-4 rounded border-gray-600 bg-[#050505] text-red-600 focus:ring-red-500 cursor-pointer" 
+                            />
+                          </th>
                           <th className="px-6 py-4 w-12 text-neutral-400">#</th>
                           <th className="px-6 py-4">Correo</th>
                           <th className="px-6 py-4">Proveedor</th>
@@ -1225,10 +1294,18 @@ export default function App() {
                       </thead>
                       <tbody className="divide-y divide-neutral-900">
                         {inventarioFiltrado.length === 0 ? (
-                          <tr><td colSpan="8" className="text-center py-12 text-neutral-500 font-medium">Sin resultados en inventario.</td></tr>
+                          <tr><td colSpan="9" className="text-center py-12 text-neutral-500 font-medium">Sin resultados en inventario.</td></tr>
                         ) : (
                           inventarioFiltrado.map((item, idx) => (
-                            <tr key={item.id} className="hover:bg-neutral-900/40 transition">
+                            <tr key={item.id} className={`transition ${seleccionadosInv.includes(item.id) ? 'bg-red-900/20' : 'hover:bg-neutral-900/40'}`}>
+                              <td className="px-6 py-4 text-center">
+                                <input 
+                                  type="checkbox" 
+                                  checked={seleccionadosInv.includes(item.id)} 
+                                  onChange={() => toggleSeleccionInv(item.id)} 
+                                  className="w-4 h-4 rounded border-gray-600 bg-[#050505] text-red-600 focus:ring-red-500 cursor-pointer" 
+                                />
+                              </td>
                               <td className="px-6 py-4 text-neutral-500 font-bold">{idx + 1}</td>
                               <td className="px-6 py-4 font-bold text-white">{item.correo}</td>
                               <td className="px-6 py-4 text-neutral-400">{item.proveedor}</td>
@@ -1247,7 +1324,7 @@ export default function App() {
                                     <UserMinus className="w-4 h-4" />
                                   </button>
                                 )}
-                                <button onClick={() => eliminarCuentaInv(item.id, item.correo)} className="p-2.5 bg-red-950/40 hover:bg-red-900/40 text-red-400 rounded-xl transition border border-red-900/30 shadow-sm" title="Eliminar"><Trash2 className="w-4 h-4" /></button>
+                                <button onClick={() => sacarDelStock(item.id, item.correo)} className="p-2.5 bg-red-950/40 hover:bg-red-900/40 text-red-400 rounded-xl transition border border-red-900/30 shadow-sm" title="Eliminar Permanente"><Trash2 className="w-4 h-4" /></button>
                               </td>
                             </tr>
                           ))
@@ -1525,7 +1602,7 @@ export default function App() {
         </div>
       )}
 
-      {/* MODAL EDITAR CLIENTE (CORREGIR FECHAS) CON AUTO-COMPLETADO */}
+      {/* MODAL EDITAR CLIENTE */}
       {modalEditarCli && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-50 flex justify-center items-center p-4">
           <div className="bg-[#0d0d0d] border border-[#3b0909] rounded-3xl w-full max-w-md p-8 space-y-5 shadow-2xl shadow-blue-950/40">
@@ -1553,7 +1630,6 @@ export default function App() {
                     onChange={(e) => {
                       const val = e.target.value;
                       setCliInicio(val);
-                      // AUTO-COMPLETADO MAGICO EN EDICION
                       if (val) {
                         const [yy, mm, dd] = val.split('-');
                         const dateObj = new Date(parseInt(yy), parseInt(mm) - 1, parseInt(dd));
@@ -1581,7 +1657,7 @@ export default function App() {
         </div>
       )}
 
-      {/* MODAL ASIGNAR CLIENTE MÚLTIPLE INTELIGENTE */}
+      {/* MODAL ASIGNAR CLIENTE */}
       {modalCli && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-50 flex justify-center items-center p-4">
           <div className="bg-[#0d0d0d] border border-[#3b0909] rounded-3xl w-full max-w-md p-8 space-y-5 shadow-2xl shadow-red-950">
@@ -1590,7 +1666,6 @@ export default function App() {
               <button onClick={cerrarModalCli} className="text-neutral-400 hover:text-white"><X className="w-6 h-6" /></button>
             </div>
             
-            {/* SELECTOR DE CLIENTES EXISTENTES */}
             <div className="bg-[#140a0a] p-4 rounded-xl border border-red-900/30 mb-2">
               <label className="text-xs font-bold uppercase tracking-wider text-red-400 mb-1.5 block">¿Es un cliente registrado?</label>
               <select 
@@ -1650,7 +1725,6 @@ export default function App() {
                     onChange={(e) => {
                       const val = e.target.value;
                       setCliInicio(val);
-                      // AUTO-COMPLETADO MAGICO DE FECHA FIN (+1 MES)
                       if (val) {
                         const [yy, mm, dd] = val.split('-');
                         const dateObj = new Date(parseInt(yy), parseInt(mm) - 1, parseInt(dd));
